@@ -50,8 +50,36 @@ no token and never touches `data/`.
 | `/promote` | Staff Leadership | Gives a rank role, logs it, DMs the member |
 | `/infract` | Staff Leadership | Logs an infraction and DMs the member. Fire and Staff Blacklist also kick |
 | `/reportembed` | Staff Leadership | Posts the staff report panel |
+| `/hrpanel` | Administrators | Private snapshot of low performance and leave |
 | `/config` | Bot owners only | Sets every role and channel the bot uses |
 | `!sc` | Bot owners only | Registers the slash commands with Discord |
+
+## HR panel
+
+Shows who is at or below 3 stars on **Performance** and who is on **Leave of
+Absence, Reduced Activity or Administrative Leave**, read from the NGC Employee
+Database Google Sheet.
+
+- An **auto-updating panel** in each server, edited in place every 30 seconds
+- **`/hrpanel`** gives an Administrator a private snapshot that does not update
+
+Setup:
+
+1. The sheet is shared, as **Viewer**, with the service account
+   `id-7modbot-679@modbot-497414.iam.gserviceaccount.com`.
+2. Copy that service account's key file into the bot folder as
+   **`credentials.json`**. On the Pi this is done by hand: the file is gitignored
+   and must never go through GitHub.
+3. `/config hr_panel_channel:#channel` in the staff hub, and again in the main
+   server. Both must be staff-only channels. The bot refuses a channel @everyone
+   can read, because the panel shows performance ratings.
+
+The bot reads only four columns (nickname, Discord ID, Performance, Employment
+Status), finds them by header name, and never requests Infractions or Notes.
+Department header rows and blank rows are skipped. Someone listed in two
+departments appears once, at their lowest rating. A rating of 0 shows as "not
+rated yet". If a read fails, the panel keeps showing the last good data and says
+so.
 
 ## How staff reports work
 
@@ -76,6 +104,9 @@ role View Channel and take it away from everyone else.
 | `handlers/embeds.js` | Shared colour palette and embed templates |
 | `handlers/forms.js` | The modal (pop-up form) definitions |
 | `handlers/interactions.js` | Button clicks and form submits |
+| `handlers/sheets.js` | Signs in to Google as the service account and reads the four roster columns |
+| `handlers/roster.js` | Turns those columns into the low performance and leave lists |
+| `handlers/hrpanel.js` | Builds the HR panel embed and keeps the panels updated |
 | `commands/` | One file per slash command |
 
 ## Notes

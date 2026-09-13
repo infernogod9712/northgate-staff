@@ -32,6 +32,9 @@ const FILE = path.join(DATA_DIR, 'settings.json');
 // in the wrong server instead of quietly saving it where nothing will read it.
 const HUB_KEYS = ['staffLeadershipRole', 'promoteChannel', 'infractChannel', 'staffReportForum'];
 const MAIN_KEYS = ['staffReportChannel'];
+// Settings every server may have its own copy of. Each server gets its own HR
+// panel, so the panel channel is set once in the hub and once in the main server.
+const BOTH_KEYS = ['hrPanelChannel'];
 
 const SNOWFLAKE = /^\d{17,20}$/;
 
@@ -93,6 +96,11 @@ function writeAll(obj) {
 // One server's own settings. Always an object, never undefined.
 function getSettings(guildId) {
   return readAll().guilds[guildId] || {};
+}
+
+// Every server that has settings saved, whatever its role.
+function listGuildIds() {
+  return Object.keys(readAll().guilds);
 }
 
 // Merge new values into one server's settings. Only the keys passed are touched.
@@ -184,6 +192,8 @@ function findReportForum() {
 module.exports = {
   HUB_KEYS,
   MAIN_KEYS,
+  BOTH_KEYS,
+  listGuildIds,
   getSettings,
   updateSettings,
   getServers,

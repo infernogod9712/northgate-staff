@@ -5,6 +5,7 @@ const config = require('./config');
 const { handleButton, handleModal } = require('./handlers/interactions');
 const { isOwner } = require('./handlers/permissions');
 const { startAutoSync } = require('./git-sync');
+const { startHrPanel } = require('./handlers/hrpanel');
 
 const client = new Client({
   intents: [
@@ -38,6 +39,14 @@ client.once(Events.ClientReady, () => {
   startAutoSync(config.gitSync || {}, {
     onBeforeRestart: () => client.destroy(),
   }).catch((e) => console.error('[git-sync] failed to start:', e.message));
+
+  // The auto-updating HR panels. A problem here is logged and never takes the
+  // rest of the bot down with it.
+  try {
+    startHrPanel(client);
+  } catch (e) {
+    console.error('[hrpanel] failed to start:', e.message);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

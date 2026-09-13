@@ -1,8 +1,8 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ChannelType, EmbedBuilder } = require('discord.js');
 const {
-  HUB_KEYS, MAIN_KEYS, getSettings, updateSettings, getServers, setServer, serverRoles,
+  HUB_KEYS, MAIN_KEYS, BOTH_KEYS, getSettings, updateSettings, getServers, setServer, serverRoles,
 } = require('../handlers/settings');
-const { isOwner } = require('../handlers/permissions');
+const { isOwner, isPubliclyReadable } = require('../handlers/permissions');
 const { COLORS } = require('../handlers/embeds');
 
 // /config [options]
@@ -20,6 +20,9 @@ const { COLORS } = require('../handlers/embeds');
 // settings have to be set from inside the hub, and the main server's from inside
 // the main server. Setting them in the wrong place is refused out loud instead of
 // being saved somewhere nothing will ever read it.
+//
+// hr_panel_channel is the exception: both servers get their own HR panel, so it is
+// accepted in either one, each server keeping its own.
 
 // [option name, settings key, kind, label shown in the embed]
 const OPTIONS = [
@@ -28,9 +31,21 @@ const OPTIONS = [
   ['infract_channel',  'infractChannel',      'channel', 'Infraction Log'],
   ['report_forum',     'staffReportForum',    'channel', 'Report Forum (HR)'],
   ['report_channel',   'staffReportChannel',  'channel', 'Report Panel Channel'],
+  ['hr_panel_channel', 'hrPanelChannel',      'channel', 'HR Panel Channel'],
 ];
 
-const owner = (key) => (HUB_KEYS.includes(key) ? 'hub' : MAIN_KEYS.includes(key) ? 'main' : null);
+// Which server a setting belongs to: 'hub', 'main' or 'either'.
+const owner = (key) => {
+  if (HUB_KEYS.includes(key)) return 'hub';
+  if (MAIN_KEYS.includes(key)) return 'main';
+  if (BOTH_KEYS.includes(key)) return 'either';
+  return null;
+};
+const fits = (key, roles) => (owner(key) === 'either' ? roles.length > 0 : roles.includes(owner(key)));
+
+// Channels whose contents members must not be able to read. The HR panel names
+// people with low performance ratings, so a channel @everyone can see is refused.
+const PRIVATE_ONLY = ['hrPanelChannel'];
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -62,6 +77,10 @@ module.exports = {
     .addChannelOption((o) => o
       .setName('report_channel')
       .setDescription('Main server: channel the staff report panel is posted in')
+      .addChannelTypes(ChannelType.GuildText))
+    .addChannelOption((o) => o
+      .setName('hr_panel_channel')
+      .setDescription('Either server: staff-only channel for the auto-updating HR panel')
       .addChannelTypes(ChannelType.GuildText)),
 
   async execute(interaction) {
@@ -73,6 +92,7 @@ module.exports = {
 
     const guildId = interaction.guild.id;
     const lines = [];
+    let problem = false;
 
     // Server role first, so the settings in this same command are checked against it.
     const serverChoice = interaction.options.getString('server');
@@ -86,8 +106,8 @@ module.exports = {
     }
 
     const roles = serverRoles(guildId);
+    const current = getSettings(guildId);
     const patch = {};
-    const refused = [];
 
     for (const [optionName, key, kind] of OPTIONS) {
       const value = kind === 'role'
@@ -95,23 +115,31 @@ module.exports = {
         : interaction.options.getChannel(optionName);
       if (!value) continue;
 
-      const needs = owner(key);
-      if (!roles.includes(needs)) {
-        refused.push({ optionName, needs });
+      if (!fits(key, roles)) {
+        problem = true;
+        const needs = owner(key);
+        const where = needs === 'hub' ? 'staff hub' : 'main server';
+        lines.push(roles.length && needs !== 'either'
+          ? `Skipped **${optionName}**: that belongs to the ${where}, and this server is not it.`
+          : `Skipped **${optionName}**: set \`server\` first so I know whether this is the hub or the main server.`);
         continue;
       }
+
+      if (PRIVATE_ONLY.includes(key) && isPubliclyReadable(value)) {
+        problem = true;
+        lines.push(`Skipped **${optionName}**: @everyone can read <#${value.id}>, and the HR panel shows staff performance ratings. Pick a staff-only channel.`);
+        continue;
+      }
+
       patch[key] = value.id;
+      // A new panel channel means a new panel message. The old message, if there
+      // was one, simply stops updating and can be deleted by hand.
+      if (key === 'hrPanelChannel' && current.hrPanelChannel !== value.id) patch.hrPanelMessage = null;
+
       lines.push(kind === 'role' ? `**${optionName}** set to <@&${value.id}>` : `**${optionName}** set to <#${value.id}>`);
     }
 
     if (Object.keys(patch).length) updateSettings(guildId, patch);
-
-    for (const { optionName, needs } of refused) {
-      const where = needs === 'hub' ? 'staff hub' : 'main server';
-      lines.push(roles.length
-        ? `Skipped **${optionName}**: that belongs to the ${where}, and this server is not it.`
-        : `Skipped **${optionName}**: set \`server\` first so I know whether this is the hub or the main server.`);
-    }
 
     // Always show the whole picture, so one command both sets and checks.
     const s = getSettings(guildId);
@@ -120,7 +148,7 @@ module.exports = {
     const describe = (id) => (!id ? 'not set' : id === guildId ? 'this server' : 'set, in another server');
 
     const embed = new EmbedBuilder()
-      .setColor(refused.length ? COLORS.infract : lines.length ? COLORS.promote : COLORS.info)
+      .setColor(problem ? COLORS.infract : lines.length ? COLORS.promote : COLORS.info)
       .setTitle(`Configuration - ${interaction.guild.name}`)
       .setDescription(lines.length ? lines.join('\n') : 'Nothing changed. Here is the current setup.')
       .addFields(
@@ -131,7 +159,7 @@ module.exports = {
     // Only list the settings this server actually owns, so nobody tries to fill in
     // a field that the command will then refuse.
     for (const [, key, kind, label] of OPTIONS) {
-      if (roles.includes(owner(key))) embed.addFields({ name: label, value: show(s[key], kind), inline: false });
+      if (fits(key, roles)) embed.addFields({ name: label, value: show(s[key], kind), inline: false });
     }
 
     embed

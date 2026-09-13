@@ -48,4 +48,18 @@ async function canManageStaff(member) {
   return !!hubMember && hubMember.roles.cache.has(role);
 }
 
-module.exports = { isOwner, isAdmin, canManageStaff };
+// True only when it is certain @everyone can see the channel. If the permissions
+// cannot be read at all it returns false, rather than blocking setup over
+// something unverifiable. Used by the HR panel, which names people with low
+// performance ratings and must never land in a channel the whole server can read.
+function isPubliclyReadable(channel) {
+  try {
+    const everyone = channel?.guild?.roles?.everyone;
+    if (!everyone || typeof channel.permissionsFor !== 'function') return false;
+    return channel.permissionsFor(everyone)?.has(PermissionFlagsBits.ViewChannel) === true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { isOwner, isAdmin, canManageStaff, isPubliclyReadable };

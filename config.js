@@ -1,5 +1,6 @@
 // Reads the secrets out of .env so nothing sensitive lives in a tracked file.
 require('dotenv').config();
+const path = require('path');
 
 // Both owners, with blanks and unfilled placeholders dropped. Stored as one array
 // so every owner check is just `ownerIds.includes(id)` no matter how many there are.
@@ -13,6 +14,17 @@ const config = {
   gitSync: {
     enabled: true,
     intervalSeconds: Number(process.env.GIT_SYNC_INTERVAL) || 30,
+  },
+  // The Google Sheets staff roster the HR panel reads. The sheet id is not a
+  // secret: nobody can open the sheet without it being shared with them. The key
+  // file IS a secret, is gitignored, and has to be copied onto the Pi by hand.
+  roster: {
+    sheetId: process.env.ROSTER_SHEET_ID || '1zgKYe984COJd25PktpU7mmaPD0ikvKa0vOincAjWVRg',
+    tab: process.env.ROSTER_TAB || 'OFFICAL STAFF ROSTER',
+    credentialsFile: process.env.GOOGLE_CREDENTIALS_FILE || path.join(__dirname, 'credentials.json'),
+  },
+  hrPanel: {
+    intervalSeconds: Number(process.env.HR_PANEL_INTERVAL) || 30,
   },
 };
 

@@ -25,6 +25,8 @@ process.env.DISCORD_TOKEN = 'test-token';
 process.env.CLIENT_ID = '';
 process.env.OWNER_ID_1 = '100000000000000001';
 process.env.OWNER_ID_2 = '';
+// Pointed at a file that does not exist, so no test can ever read a real key.
+process.env.GOOGLE_CREDENTIALS_FILE = path.join(DATA, 'no-credentials-here.json');
 
 const ROOT = path.join(__dirname, '..');
 const FILE = path.join(DATA, 'settings.json');
@@ -123,7 +125,7 @@ function fakeInteraction({ client, guild, member, user, options = {}, fields = {
     },
     fields: { getTextInputValue: (n) => fields[n] },
   };
-  i.deferReply = async () => { i.deferred = true; };
+  i.deferReply = async (opts) => { i.deferred = true; i.deferOpts = opts; };
   i.editReply = async (p) => { i.replies.push(p); };
   i.reply = async (p) => { i.replied = true; i.replies.push(p); };
   return i;
@@ -479,6 +481,423 @@ function world() {
     await handleModal(i);
     if (wrong.threads.created.length) return 'filed into the wrong server';
     return right.threads.created.length === 1 || `hub forum got ${right.threads.created.length}. said: ${said(i)}`;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: reading the roster');
+  // -------------------------------------------------------------------------
+  // Invented names and ids. The SHAPE matches the real sheet, measured on
+  // 2026-09-13: department header rows with no status, blank rows, one person in
+  // two departments with different ratings, people with no Discord ID, 0 ratings,
+  // and the sheet's own "Leave of Absense" spelling. Golf and Hotel are each
+  // unrated in one department and rated in another, which is the case where an
+  // unrated row must not be allowed to hide the real rating.
+  const { summarize } = require(path.join(ROOT, 'handlers', 'roster'));
+  const ROSTER = {
+    nickname:    ['Studio Ownership', 'Alpha', 'Bravo', 'Golf', 'Hotel', '', 'Dev Team', 'Charlie', 'Alpha', 'Delta', 'Echo', 'Golf', 'Hotel', 'IT', 'Foxtrot', '', ''],
+    discordId:   ['', '111111111111111111', '222222222222222222', '555555555555555555', '666666666666666666', '', '', '333333333333333333', '111111111111111111', '?', '', '555555555555555555', '666666666666666666', '', '444444444444444444', '', ''],
+    performance: ['0', '5', '2', '0', '0', '', '0', '0', '3', '1', '4', '4', '2', '0', '0', '0', '0'],
+    status:      ['', 'Administrative Leave', 'Active', 'Active', 'Active', '', '', 'Active', 'Active', 'Active', 'Leave of Absense', 'Active', 'Active', '', 'Reduced Activity', '', ''],
+  };
+  const summary = summarize(ROSTER);
+  const names = (list) => list.map((p) => p.nickname);
+
+  await check('department header rows and blank rows are never treated as people', () => {
+    const all = [...names(summary.low), ...names(summary.leave)];
+    const headers = ['Studio Ownership', 'Dev Team', 'IT'].filter((h) => all.includes(h));
+    if (headers.length) return `treated ${headers.join(', ')} as a person`;
+    if (summary.departments !== 3) return `counted ${summary.departments} departments, expected 3`;
+    return summary.people === 8 || `counted ${summary.people} people, expected 8`;
+  });
+
+  await check('someone on the roster twice is listed once, at their lowest real rating', () => {
+    const alpha = summary.low.filter((p) => p.nickname === 'Alpha');
+    if (alpha.length !== 1) return `listed ${alpha.length} times`;
+    return (alpha[0].rating === 3 && alpha[0].department === 'Dev Team') || JSON.stringify(alpha[0]);
+  });
+
+  await check('a 0 shows as not rated, and never hides a real rating from another row', () => {
+    const charlie = summary.low.find((p) => p.nickname === 'Charlie');
+    if (!charlie || charlie.rating !== 0) return `Charlie: ${JSON.stringify(charlie)}`;
+    // Golf is rated 4 in one department and unrated in another: not low at all.
+    // Hotel is rated 2 in one department and unrated in another: low, at 2.
+    if (names(summary.low).includes('Golf')) return 'an unrated row put a 4 star person on the low list';
+    const hotel = summary.low.find((p) => p.nickname === 'Hotel');
+    return (hotel && hotel.rating === 2) || `Hotel: ${JSON.stringify(hotel)}`;
+  });
+
+  await check('people with no real Discord ID on the roster are still listed', () => {
+    const delta = summary.low.find((p) => p.nickname === 'Delta');
+    return (delta && delta.discordId === null && delta.rating === 1) || JSON.stringify(delta);
+  });
+
+  await check('the sheet spelling "Leave of Absense" still counts as leave', () => {
+    const echo = summary.leave.find((p) => p.nickname === 'Echo');
+    return (echo && echo.status === 'Leave of Absence') || JSON.stringify(echo);
+  });
+
+  await check('Active people and 4 or 5 star people are left off', () => {
+    if (names(summary.leave).includes('Bravo')) return 'listed an Active person as on leave';
+    return !names(summary.low).includes('Echo') || 'listed a 4 star person as low';
+  });
+
+  await check('lowest ratings come first, unrated at the bottom', () => {
+    const order = names(summary.low).join(',');
+    return order === 'Delta,Bravo,Hotel,Alpha,Charlie,Foxtrot' || order;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: the embed');
+  // -------------------------------------------------------------------------
+  const hrpanel = require(path.join(ROOT, 'handlers', 'hrpanel'));
+  const embedJson = (embed) => (embed.toJSON ? embed.toJSON() : embed);
+  const good = { data: { summary, syncedAt: Date.now() }, error: null };
+
+  await check('people with an ID are mentioned, people without one are named', () => {
+    const text = JSON.stringify(embedJson(hrpanel.buildPanelEmbed(good, { live: true })));
+    if (!text.includes('<@222222222222222222>')) return 'no mention for Bravo';
+    return text.includes('no Discord ID on the roster') || 'Delta was not named';
+  });
+
+  await check('a nickname cannot break the embed formatting', () => {
+    const odd = summarize({ nickname: ['**bold**'], discordId: [''], performance: ['2'], status: ['Active'] });
+    const field = embedJson(hrpanel.buildPanelEmbed({ data: { summary: odd, syncedAt: Date.now() } }, { live: true })).fields[0].value;
+    return field.includes('\\*\\*bold') || field;
+  });
+
+  await check('a huge roster still fits inside Discord field limits', () => {
+    const many = { nickname: [], discordId: [], performance: [], status: [] };
+    for (let n = 0; n < 300; n += 1) {
+      many.nickname.push(`Person Number ${n}`);
+      many.discordId.push(`5${String(n).padStart(17, '0')}`);
+      many.performance.push('1');
+      many.status.push('Leave of Absense');
+    }
+    const fields = embedJson(hrpanel.buildPanelEmbed({ data: { summary: summarize(many), syncedAt: Date.now() } }, { live: true })).fields;
+    const over = fields.filter((f) => f.value.length > 1024);
+    if (over.length) return `a field is ${over[0].value.length} characters`;
+    return fields.every((f) => /more on the roster/.test(f.value)) || 'did not say how many were left off';
+  });
+
+  await check('before any successful read it shows the problem, not an empty panel', () => {
+    const text = JSON.stringify(embedJson(hrpanel.buildPanelEmbed({ data: null, error: 'the roster is not shared with the service account' }, { live: true })));
+    return /not shared/.test(text) || text;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: /config hr_panel_channel');
+  // -------------------------------------------------------------------------
+  const CH_PANEL_HUB = '600000000000000005';
+  const CH_PANEL_MAIN = '600000000000000006';
+
+  function panelChannel(client, id, { publicView = false } = {}) {
+    const everyone = { id: 'everyone' };
+    const c = { id, name: `panel${id.slice(-1)}`, guild: { roles: { everyone } }, sent: [], edits: [], messagesById: new Map() };
+    c.permissionsFor = (role) => ({ has: () => (role === everyone ? publicView : true) });
+    c.send = async (payload) => {
+      const msg = { id: `9${String(c.sent.length + 1).padStart(17, '0')}` };
+      msg.edit = async (p) => { c.edits.push(p); return msg; };
+      c.messagesById.set(msg.id, msg);
+      c.sent.push(payload);
+      return msg;
+    };
+    c.messages = {
+      fetch: async (messageId) => {
+        if (!c.messagesById.has(messageId)) throw new Error('Unknown Message');
+        return c.messagesById.get(messageId);
+      },
+    };
+    client._channels.set(id, c);
+    return c;
+  }
+
+  async function configPanel(guild, client, channel) {
+    const user = fakeUser(OWNER);
+    const i = fakeInteraction({ client, guild, member: join(guild, user), user, options: { hr_panel_channel: channel } });
+    await commands.config.execute(i);
+    return i;
+  }
+
+  await check('hr_panel_channel can be set in the staff hub', async () => {
+    const w = world();
+    settings.setServer('hub', HUB);
+    const i = await configPanel(w.hub, w.client, panelChannel(w.client, CH_PANEL_HUB));
+    return settings.getSettings(HUB).hrPanelChannel === CH_PANEL_HUB || said(i);
+  });
+
+  await check('hr_panel_channel can be set in the main server too', async () => {
+    const w = world();
+    settings.setServer('main', MAIN);
+    const i = await configPanel(w.main, w.client, panelChannel(w.client, CH_PANEL_MAIN));
+    return settings.getSettings(MAIN).hrPanelChannel === CH_PANEL_MAIN || said(i);
+  });
+
+  await check('hr_panel_channel is refused until the server is marked', async () => {
+    const w = world();
+    const i = await configPanel(w.hub, w.client, panelChannel(w.client, CH_PANEL_HUB));
+    if (settings.getSettings(HUB).hrPanelChannel) return 'saved it anyway';
+    return /set `server` first/.test(said(i)) || said(i);
+  });
+
+  await check('hr_panel_channel refuses a channel @everyone can read', async () => {
+    const w = world();
+    settings.setServer('hub', HUB);
+    const i = await configPanel(w.hub, w.client, panelChannel(w.client, CH_PANEL_HUB, { publicView: true }));
+    if (settings.getSettings(HUB).hrPanelChannel) return 'saved a public channel';
+    return /@everyone can read/.test(said(i)) || said(i);
+  });
+
+  await check('moving the panel to a new channel starts a fresh panel message', async () => {
+    const w = world();
+    settings.setServer('hub', HUB);
+    settings.updateSettings(HUB, { hrPanelChannel: '600000000000000099', hrPanelMessage: '900000000000000001' });
+    await configPanel(w.hub, w.client, panelChannel(w.client, CH_PANEL_HUB));
+    return settings.getSettings(HUB).hrPanelMessage === null || `kept ${settings.getSettings(HUB).hrPanelMessage}`;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: auto-updating');
+  // -------------------------------------------------------------------------
+  function fakeReader(columns) {
+    const r = { calls: 0, fail: null };
+    r.isConfigured = () => true;
+    r.readRoster = async () => {
+      r.calls += 1;
+      if (r.fail) throw new Error(r.fail);
+      return columns;
+    };
+    return r;
+  }
+
+  function panelWorld({ publicView = false, both = false } = {}) {
+    const w = world();
+    settings.setServer('hub', HUB);
+    settings.setServer('main', MAIN);
+    const hubChannel = panelChannel(w.client, CH_PANEL_HUB, { publicView });
+    settings.updateSettings(HUB, { hrPanelChannel: CH_PANEL_HUB });
+    let mainChannel = null;
+    if (both) {
+      mainChannel = panelChannel(w.client, CH_PANEL_MAIN);
+      settings.updateSettings(MAIN, { hrPanelChannel: CH_PANEL_MAIN });
+    }
+    const reader = fakeReader(ROSTER);
+    const warnings = [];
+    const panel = hrpanel.createHrPanel({ client: w.client, reader, log: { warn: (m) => warnings.push(m) } });
+    return { ...w, hubChannel, mainChannel, reader, warnings, panel };
+  }
+  const payloadText = (payload) => JSON.stringify(payload.embeds.map(embedJson));
+
+  await check('the first update posts the panel and remembers the message', async () => {
+    const p = panelWorld();
+    await p.panel.tick();
+    if (p.hubChannel.sent.length !== 1) return `posted ${p.hubChannel.sent.length} times`;
+    return settings.getSettings(HUB).hrPanelMessage === '900000000000000001' || `stored ${settings.getSettings(HUB).hrPanelMessage}`;
+  });
+
+  await check('after that it edits the same message instead of posting again', async () => {
+    const p = panelWorld();
+    await p.panel.tick();
+    await p.panel.tick();
+    await p.panel.tick();
+    return (p.hubChannel.sent.length === 1 && p.hubChannel.edits.length === 2) || `sent ${p.hubChannel.sent.length}, edited ${p.hubChannel.edits.length}`;
+  });
+
+  await check('if someone deletes the panel message, a new one is posted', async () => {
+    const p = panelWorld();
+    await p.panel.tick();
+    p.hubChannel.messagesById.clear();
+    await p.panel.tick();
+    if (p.hubChannel.sent.length !== 2) return `sent ${p.hubChannel.sent.length}`;
+    return settings.getSettings(HUB).hrPanelMessage === '900000000000000002' || 'did not remember the new message';
+  });
+
+  await check('it will not post in a channel @everyone can read, even if one was saved', async () => {
+    const p = panelWorld({ publicView: true });
+    await p.panel.tick();
+    if (p.hubChannel.sent.length) return 'posted performance ratings in a public channel';
+    return p.warnings.some((m) => /@everyone can read/.test(m)) || 'did not log why';
+  });
+
+  await check('a failed read keeps the last good data instead of blanking the panel', async () => {
+    const p = panelWorld();
+    await p.panel.tick();
+    p.reader.fail = 'Google is down';
+    await p.panel.tick();
+    const text = payloadText(p.hubChannel.edits.at(-1));
+    return (text.includes('Bravo') && text.includes('Could not reach')) || text;
+  });
+
+  await check('a repeating failure is logged once, not every 30 seconds', async () => {
+    const p = panelWorld();
+    p.reader.fail = 'Google is down';
+    await p.panel.tick();
+    await p.panel.tick();
+    await p.panel.tick();
+    const n = p.warnings.filter((m) => /could not read the roster/.test(m)).length;
+    return n === 1 || `logged ${n} times`;
+  });
+
+  await check('two updates running at once do not post two panels', async () => {
+    const p = panelWorld();
+    await Promise.all([p.panel.tick(), p.panel.tick()]);
+    return p.hubChannel.sent.length === 1 || `posted ${p.hubChannel.sent.length} times`;
+  });
+
+  await check('both servers get their own panel from a single read of the sheet', async () => {
+    const p = panelWorld({ both: true });
+    await p.panel.tick();
+    if (p.hubChannel.sent.length !== 1 || p.mainChannel.sent.length !== 1) return `hub ${p.hubChannel.sent.length}, main ${p.mainChannel.sent.length}`;
+    return p.reader.calls === 1 || `read the sheet ${p.reader.calls} times`;
+  });
+
+  await check('with no panel channel set anywhere, the sheet is never read', async () => {
+    const w = world();
+    settings.setServer('hub', HUB);
+    const reader = fakeReader(ROSTER);
+    await hrpanel.createHrPanel({ client: w.client, reader, log: { warn: () => {} } }).tick();
+    return reader.calls === 0 || `read it ${reader.calls} times`;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: /hrpanel');
+  // -------------------------------------------------------------------------
+  const { MessageFlags } = require('discord.js');
+
+  await check('Staff Leadership without Administrator cannot run /hrpanel', async () => {
+    const p = panelWorld();
+    hrpanel.setPanel(p.panel);
+    settings.updateSettings(HUB, { staffLeadershipRole: LEAD });
+    const user = fakeUser('700000000000000050');
+    const i = fakeInteraction({ client: p.client, guild: p.hub, member: join(p.hub, user, [LEAD]), user });
+    await commands.hrpanel.execute(i);
+    if (i.replies.some((r) => r.embeds)) return 'showed the panel to a non-admin';
+    return /Administrator/.test(said(i)) || said(i);
+  });
+
+  await check('an Administrator gets a snapshot that only they can see', async () => {
+    const p = panelWorld();
+    hrpanel.setPanel(p.panel);
+    const user = fakeUser('700000000000000051');
+    const i = fakeInteraction({ client: p.client, guild: p.hub, member: join(p.hub, user, [], true), user });
+    await commands.hrpanel.execute(i);
+    if (i.deferOpts?.flags !== MessageFlags.Ephemeral) return 'the reply is visible to everyone in the channel';
+    const text = said(i);
+    return (text.includes('Bravo') && /does not update/.test(text)) || text;
+  });
+
+  await check('a snapshot right after a panel update does not read the sheet again', async () => {
+    const p = panelWorld();
+    hrpanel.setPanel(p.panel);
+    await p.panel.tick();
+    const user = fakeUser('700000000000000052');
+    const i = fakeInteraction({ client: p.client, guild: p.hub, member: join(p.hub, user, [], true), user });
+    await commands.hrpanel.execute(i);
+    return p.reader.calls === 1 || `read the sheet ${p.reader.calls} times`;
+  });
+
+  // -------------------------------------------------------------------------
+  section('HR panel: Google sign-in, and what it asks the sheet for');
+  // -------------------------------------------------------------------------
+  const crypto = require('crypto');
+  const { createRosterReader } = require(path.join(ROOT, 'handlers', 'sheets'));
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const KEY_PATH = path.join(DATA, 'test-credentials.json');
+  fs.writeFileSync(KEY_PATH, JSON.stringify({
+    type: 'service_account',
+    client_email: 'panel@test.iam.gserviceaccount.com',
+    private_key: privateKey,
+    token_uri: 'https://oauth2.googleapis.com/token',
+  }));
+
+  // The real header row, with the columns deliberately moved around, plus the
+  // sensitive columns the bot must never ask for.
+  const MOVED = ['nickname', 'Roblox ID', 'Discord ID', 'Roles', 'Employment Status', 'Performance', 'Infractions', 'Notes'];
+
+  function google({ status = 200 } = {}) {
+    const calls = [];
+    const reply = (code, body) => ({ ok: code >= 200 && code < 300, status: code, json: async () => body });
+    const fetchImpl = async (url, init = {}) => {
+      const text = decodeURIComponent(String(url));
+      calls.push({ url: text, init });
+      if (text.startsWith('https://oauth2.googleapis.com/token')) return reply(200, { access_token: 'test-access', expires_in: 3600 });
+      if (status !== 200) return reply(status, { error: { message: 'no' } });
+      if (text.includes('values:batchGet')) {
+        return reply(200, { valueRanges: [{ values: [['Alpha']] }, { values: [['111111111111111111']] }, { values: [['2']] }, { values: [['Active']] }] });
+      }
+      return reply(200, { values: [['NGC logo'], MOVED] });
+    };
+    return { calls, fetchImpl };
+  }
+  const reader = (fetchImpl, credentialsFile = KEY_PATH) => createRosterReader({ credentialsFile, sheetId: 'test-sheet', tab: 'OFFICAL STAFF ROSTER', fetchImpl });
+
+  await check('columns are found by header name, so moving a column does not break it', async () => {
+    const g = google();
+    await reader(g.fetchImpl).readRoster();
+    const batch = g.calls.find((c) => c.url.includes('values:batchGet'))?.url || '';
+    const wanted = ['!A3:A', '!C3:C', '!F3:F', '!E3:E'].filter((r) => !batch.includes(r));
+    return !wanted.length || `did not request ${wanted.join(', ')}. url: ${batch}`;
+  });
+
+  await check('it never asks the sheet for Infractions or Notes', async () => {
+    const g = google();
+    await reader(g.fetchImpl).readRoster();
+    const batch = g.calls.find((c) => c.url.includes('values:batchGet'))?.url || '';
+    return (!batch.includes('!G') && !batch.includes('!H')) || `requested a sensitive column: ${batch}`;
+  });
+
+  await check('Discord IDs are read as text, so they cannot lose digits', async () => {
+    const g = google();
+    await reader(g.fetchImpl).readRoster();
+    const batch = g.calls.find((c) => c.url.includes('values:batchGet'))?.url || '';
+    return batch.includes('valueRenderOption=FORMATTED_VALUE') || batch;
+  });
+
+  await check('it signs in with a real, read-only, correctly signed token', async () => {
+    const g = google();
+    await reader(g.fetchImpl).readRoster();
+    const assertion = g.calls.find((c) => c.url.startsWith('https://oauth2'))?.init.body.get('assertion');
+    if (!assertion) return 'never signed in';
+    const [h, p, s] = assertion.split('.');
+    if (!crypto.createVerify('RSA-SHA256').update(`${h}.${p}`).verify(publicKey, Buffer.from(s, 'base64url'))) return 'signature does not verify';
+    const claims = JSON.parse(Buffer.from(p, 'base64url').toString());
+    if (!/readonly$/.test(claims.scope)) return `scope is ${claims.scope}, which is not read-only`;
+    return claims.iss === 'panel@test.iam.gserviceaccount.com' || `signed as ${claims.iss}`;
+  });
+
+  await check('the sign-in is reused, not repeated on every read', async () => {
+    const g = google();
+    const r = reader(g.fetchImpl);
+    await r.readRoster();
+    await r.readRoster();
+    const n = g.calls.filter((c) => c.url.startsWith('https://oauth2')).length;
+    return n === 1 || `signed in ${n} times`;
+  });
+
+  await check('a missing key file is reported plainly and nothing is sent to Google', async () => {
+    const g = google();
+    const r = reader(g.fetchImpl, path.join(DATA, 'nope.json'));
+    if (r.isConfigured()) return 'says it is configured with no key file';
+    try {
+      await r.readRoster();
+      return 'read the roster with no key';
+    } catch (err) {
+      if (g.calls.length) return 'contacted Google anyway';
+      return /credentials\.json/.test(err.message) || err.message;
+    }
+  });
+
+  await check('an unshared sheet says so', async () => {
+    const g = google({ status: 403 });
+    try {
+      await reader(g.fetchImpl).readRoster();
+      return 'no error on a 403';
+    } catch (err) {
+      return /not shared/.test(err.message) || err.message;
+    }
   });
 
   console.log('\nRESULT');

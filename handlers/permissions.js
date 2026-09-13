@@ -1,11 +1,12 @@
 // Who is allowed to do what.
 //
 //   isOwner        - the two ids in .env. Runs !sc and /config, nothing else.
-//   canManageStaff - Administrators, or the Staff Leadership role set with /config.
-//                    Runs /promote and /infract.
+//   canManageStaff - Administrators of the server the command is run in, or
+//                    anyone holding the Staff Leadership role IN THE STAFF HUB.
+//                    Runs /promote, /infract and /reportembed.
 const { PermissionFlagsBits } = require('discord.js');
 const { ownerIds } = require('../config');
-const { getSettings } = require('./settings');
+const { getServers, getSettings } = require('./settings');
 
 function isOwner(userId) {
   return ownerIds.includes(userId);
@@ -15,13 +16,36 @@ function isAdmin(member) {
   return !!member?.permissions?.has(PermissionFlagsBits.Administrator);
 }
 
-// Until the Staff Leadership role is set with /config, this is Administrators only.
-function canManageStaff(member) {
+// The Staff Leadership role lives in the hub, so that is where it is checked,
+// even when the command is run from the main server. Checking only the server
+// the command ran in meant leadership could not use their own commands from
+// the main server at all.
+//
+// Async because the member has to be looked up in the hub, which is a different
+// server from the one the interaction came from.
+async function canManageStaff(member) {
   if (!member) return false;
   if (isAdmin(member)) return true;
-  const s = getSettings(member.guild.id);
-  if (!s.staffLeadershipRole) return false;
-  return member.roles.cache.has(s.staffLeadershipRole);
+
+  const { hub } = getServers();
+
+  // No hub marked yet: fall back to this server's own role, which is how the bot
+  // behaved before the two servers were told apart. Keeps an existing setup
+  // working until /config server:hub is run.
+  if (!hub) {
+    const role = getSettings(member.guild.id).staffLeadershipRole;
+    return !!role && member.roles.cache.has(role);
+  }
+
+  const role = getSettings(hub).staffLeadershipRole;
+  if (!role) return false;
+
+  if (member.guild.id === hub) return member.roles.cache.has(role);
+
+  const hubGuild = member.client.guilds.cache.get(hub);
+  if (!hubGuild) return false;
+  const hubMember = await hubGuild.members.fetch(member.id).catch(() => null);
+  return !!hubMember && hubMember.roles.cache.has(role);
 }
 
 module.exports = { isOwner, isAdmin, canManageStaff };

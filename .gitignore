@@ -2,3 +2,8 @@ node_modules/
 .env
 data/
 *.log
+
+# Google service account keys. A key file in this folder must never be committed.
+google-credentials.json
+*service-account*.json
+*credentials*.json

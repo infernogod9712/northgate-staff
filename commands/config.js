@@ -1,5 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ChannelType, EmbedBuilder } = require('discord.js');
-const { getSettings, updateSettings } = require('../handlers/settings');
+const {
+  HUB_KEYS, MAIN_KEYS, getSettings, updateSettings, getServers, setServer, serverRoles,
+} = require('../handlers/settings');
 const { isOwner } = require('../handlers/permissions');
 const { COLORS } = require('../handlers/embeds');
 
@@ -7,32 +9,60 @@ const { COLORS } = require('../handlers/embeds');
 // One command for every setting. Run it with no options to see what is set now.
 // Owner only: the two ids in .env, nobody else, not even Administrators.
 //
-// Settings live per guild, so you run this once in the main server (for the report
-// panel channel) and once in the staff hub (for everything else).
+// The bot lives in two servers with different jobs, so the first thing to set in
+// each one is what it is:
+//
+//   /config server:hub   in the NorthGate Studios staff hub
+//   /config server:main  in the NGC main server
+//
+// After that, each server only accepts its own settings. A role or channel option
+// can only ever pick things from the server you are standing in, so the hub's
+// settings have to be set from inside the hub, and the main server's from inside
+// the main server. Setting them in the wrong place is refused out loud instead of
+// being saved somewhere nothing will ever read it.
+
+// [option name, settings key, kind, label shown in the embed]
+const OPTIONS = [
+  ['staff_leadership', 'staffLeadershipRole', 'role',    'Staff Leadership Role'],
+  ['promote_channel',  'promoteChannel',      'channel', 'Promotion Log'],
+  ['infract_channel',  'infractChannel',      'channel', 'Infraction Log'],
+  ['report_forum',     'staffReportForum',    'channel', 'Report Forum (HR)'],
+  ['report_channel',   'staffReportChannel',  'channel', 'Report Panel Channel'],
+];
+
+const owner = (key) => (HUB_KEYS.includes(key) ? 'hub' : MAIN_KEYS.includes(key) ? 'main' : null);
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('config')
     .setDescription('Set up the bot for this server (bot owners only)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((o) => o
+      .setName('server')
+      .setDescription('What this server is. Set this first in each server')
+      .addChoices(
+        { name: 'Staff hub (NorthGate Studios)', value: 'hub' },
+        { name: 'Main server (NGC)', value: 'main' },
+      ))
     .addRoleOption((o) => o
       .setName('staff_leadership')
-      .setDescription('Role allowed to use /promote and /infract'))
+      .setDescription('Staff hub: role allowed to use /promote and /infract'))
     .addChannelOption((o) => o
       .setName('promote_channel')
-      .setDescription('Where promotions are logged')
+      .setDescription('Staff hub: where promotions are logged')
       .addChannelTypes(ChannelType.GuildText))
     .addChannelOption((o) => o
       .setName('infract_channel')
-      .setDescription('Where infractions are logged')
-      .addChannelTypes(ChannelType.GuildText))
-    .addChannelOption((o) => o
-      .setName('report_channel')
-      .setDescription('Main server channel the staff report panel is posted in')
+      .setDescription('Staff hub: where infractions are logged')
       .addChannelTypes(ChannelType.GuildText))
     .addChannelOption((o) => o
       .setName('report_forum')
-      .setDescription('Locked HR forum in the staff hub where reports are filed')
-      .addChannelTypes(ChannelType.GuildForum)),
+      .setDescription('Staff hub: the locked HR forum reports are filed in')
+      .addChannelTypes(ChannelType.GuildForum))
+    .addChannelOption((o) => o
+      .setName('report_channel')
+      .setDescription('Main server: channel the staff report panel is posted in')
+      .addChannelTypes(ChannelType.GuildText)),
 
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -41,47 +71,73 @@ module.exports = {
       return interaction.editReply({ content: 'Only the bot owners can change the configuration.' });
     }
 
-    // Each option maps to one settings key. Anything the user left out stays as it was.
-    const OPTIONS = [
-      ['staff_leadership', 'staffLeadershipRole', 'role'],
-      ['promote_channel',  'promoteChannel',     'channel'],
-      ['infract_channel',  'infractChannel',     'channel'],
-      ['report_channel',   'staffReportChannel', 'channel'],
-      ['report_forum',     'staffReportForum',   'channel'],
-    ];
+    const guildId = interaction.guild.id;
+    const lines = [];
 
+    // Server role first, so the settings in this same command are checked against it.
+    const serverChoice = interaction.options.getString('server');
+    if (serverChoice) {
+      const before = getServers()[serverChoice];
+      setServer(serverChoice, guildId);
+      const name = serverChoice === 'hub' ? 'staff hub' : 'main server';
+      lines.push(before && before !== guildId
+        ? `**This server is now the ${name}.** It replaces the server that was the ${name} before.`
+        : `**This server is the ${name}.**`);
+    }
+
+    const roles = serverRoles(guildId);
     const patch = {};
-    const changed = [];
+    const refused = [];
+
     for (const [optionName, key, kind] of OPTIONS) {
       const value = kind === 'role'
         ? interaction.options.getRole(optionName)
         : interaction.options.getChannel(optionName);
       if (!value) continue;
+
+      const needs = owner(key);
+      if (!roles.includes(needs)) {
+        refused.push({ optionName, needs });
+        continue;
+      }
       patch[key] = value.id;
-      changed.push(kind === 'role' ? `**${optionName}** set to <@&${value.id}>` : `**${optionName}** set to <#${value.id}>`);
+      lines.push(kind === 'role' ? `**${optionName}** set to <@&${value.id}>` : `**${optionName}** set to <#${value.id}>`);
     }
 
-    if (changed.length) updateSettings(interaction.guild.id, patch);
+    if (Object.keys(patch).length) updateSettings(guildId, patch);
 
-    // Always show the full current setup, so one command both sets and checks.
-    const s = getSettings(interaction.guild.id);
-    const show = (id, kind) => {
-      if (!id) return 'not set';
-      return kind === 'role' ? `<@&${id}>` : `<#${id}>`;
-    };
+    for (const { optionName, needs } of refused) {
+      const where = needs === 'hub' ? 'staff hub' : 'main server';
+      lines.push(roles.length
+        ? `Skipped **${optionName}**: that belongs to the ${where}, and this server is not it.`
+        : `Skipped **${optionName}**: set \`server\` first so I know whether this is the hub or the main server.`);
+    }
+
+    // Always show the whole picture, so one command both sets and checks.
+    const s = getSettings(guildId);
+    const servers = getServers();
+    const show = (id, kind) => (!id ? 'not set' : kind === 'role' ? `<@&${id}>` : `<#${id}>`);
+    const describe = (id) => (!id ? 'not set' : id === guildId ? 'this server' : 'set, in another server');
 
     const embed = new EmbedBuilder()
-      .setColor(changed.length ? COLORS.promote : COLORS.info)
+      .setColor(refused.length ? COLORS.infract : lines.length ? COLORS.promote : COLORS.info)
       .setTitle(`Configuration - ${interaction.guild.name}`)
-      .setDescription(changed.length ? changed.join('\n') : 'Nothing changed. Here is the current setup.')
+      .setDescription(lines.length ? lines.join('\n') : 'Nothing changed. Here is the current setup.')
       .addFields(
-        { name: 'Staff Leadership Role', value: show(s.staffLeadershipRole, 'role'), inline: false },
-        { name: 'Promotion Log',         value: show(s.promoteChannel, 'channel'),   inline: true },
-        { name: 'Infraction Log',        value: show(s.infractChannel, 'channel'),   inline: true },
-        { name: 'Report Panel Channel',  value: show(s.staffReportChannel, 'channel'), inline: false },
-        { name: 'Report Forum (HR)',     value: show(s.staffReportForum, 'channel'),  inline: false },
-      )
-      .setFooter({ text: 'Settings are per server. Run /config in the main server and the staff hub separately.' })
+        { name: 'Staff Hub', value: describe(servers.hub), inline: true },
+        { name: 'Main Server', value: describe(servers.main), inline: true },
+      );
+
+    // Only list the settings this server actually owns, so nobody tries to fill in
+    // a field that the command will then refuse.
+    for (const [, key, kind, label] of OPTIONS) {
+      if (roles.includes(owner(key))) embed.addFields({ name: label, value: show(s[key], kind), inline: false });
+    }
+
+    embed
+      .setFooter({ text: roles.length
+        ? 'Hub settings are set in the hub, main server settings in the main server.'
+        : 'Start with /config server:hub in the staff hub, or /config server:main in the main server.' })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });

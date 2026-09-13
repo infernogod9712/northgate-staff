@@ -3,8 +3,17 @@
 The staff management bot for NorthGate Studios. Handles staff promotions,
 infractions, and staff reports.
 
-It runs across two servers: the NGC main server and the NorthGate Studios staff
-hub. Settings are saved per server, so `/config` is run once in each.
+It runs across two servers with different jobs:
+
+| Server | What lives there |
+| --- | --- |
+| **Staff hub** (NorthGate Studios) | Staff Leadership role, promotion log, infraction log, locked HR report forum |
+| **Main server** (NGC) | The staff report panel |
+
+The bot is told which server is which with `/config server:hub` and
+`/config server:main`. Hub settings are always read from the hub, whichever server
+a command is run in, so leadership can promote and infract from either server and
+everything still logs in the hub.
 
 ## Setup
 
@@ -15,10 +24,24 @@ hub. Settings are saved per server, so `/config` is run once in each.
 4. `node index.js`
 5. Send `!sc` in any server the bot is in to register the slash commands. Only the
    two owner ids can run it. Global commands take up to about an hour to appear.
-6. Run `/config` in the staff hub to set the leadership role, the promotion and
-   infraction log channels, and the HR report forum.
-7. Run `/config` in the main server to set the report panel channel, then
+6. **In the staff hub:** `/config server:hub`, plus `staff_leadership`,
+   `promote_channel`, `infract_channel` and `report_forum`. They can all go in the
+   same command.
+7. **In the main server:** `/config server:main` and `report_channel`, then
    `/reportembed` to post the panel.
+
+A server only accepts its own settings. Trying to set a hub setting in the main
+server is refused and says why, rather than being saved where nothing reads it.
+For a single test server, run both `server:hub` and `server:main` in it.
+
+Until both servers are marked, the bot keeps working the way it did before the
+split, reading settings from whichever server a command runs in. That is what
+lets an existing install update without its logs or reports stopping. The one
+exception is Fire and Staff Blacklist, which refuse to remove anyone until a hub
+is marked.
+
+`npm run check` tests the two-server behaviour with fake Discord objects. It needs
+no token and never touches `data/`.
 
 ## Commands
 

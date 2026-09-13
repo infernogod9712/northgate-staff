@@ -4,7 +4,8 @@
   "description": "NorthGate Studios Staff Management bot",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node tools/check.js"
   },
   "dependencies": {
     "discord.js": "^14.16.3",

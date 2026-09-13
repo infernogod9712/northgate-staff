@@ -1,14 +1,22 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
-const { getSettings } = require('../handlers/settings');
+const { getServers, hubSettings } = require('../handlers/settings');
 const { canManageStaff } = require('../handlers/permissions');
 const { infractionEmbed } = require('../handlers/embeds');
 
 // /infract [user] [type] [reason]
-// Log-only for most types. Demotion does NOT remove roles. Fire also kicks the
-// member from the staff hub. All types share one embed; only Type + Reason change.
+// Log-only for most types. Demotion does NOT remove roles. Fire and Staff
+// Blacklist also kick the member from the staff hub. All types share one embed;
+// only Type + Reason change.
+//
+// The kick always targets the staff hub, never the server the command was run
+// in. It used to use the current server, so a Fire run from the main server
+// removed the person from the whole community while their DM said "removed from
+// the staff hub". If no hub has been set, the kick is refused rather than guessed.
 const TYPES = ['Warning', 'Strike', 'Suspension', 'Demotion', 'Fire', 'Staff Blacklist'];
+const KICKS = ['Fire', 'Staff Blacklist'];
 
 module.exports = {
+  TYPES,
   data: new SlashCommandBuilder()
     .setName('infract')
     .setDescription('Log an infraction against a staff member')
@@ -22,7 +30,7 @@ module.exports = {
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    if (!canManageStaff(interaction.member)) {
+    if (!(await canManageStaff(interaction.member))) {
       return interaction.editReply({ content: 'You need the Staff Leadership role to use this.' });
     }
 
@@ -30,21 +38,34 @@ module.exports = {
     const type = interaction.options.getString('type');
     const reason = interaction.options.getString('reason');
     const issuer = interaction.user;
+    const kicks = KICKS.includes(type);
+
+    // Refuse before anything is sent. A DM saying "you have been removed" followed
+    // by no removal is worse than no infraction at all.
+    const { hub } = getServers();
+    const hubGuild = hub ? interaction.client.guilds.cache.get(hub) : null;
+    if (kicks && !hubGuild) {
+      return interaction.editReply({
+        content: hub
+          ? `I am not in the staff hub any more, so I cannot remove them. Nothing was logged or sent.`
+          : `No staff hub is set, so I do not know which server to remove them from. Run \`/config server:hub\` in the staff hub first. Nothing was logged or sent.`,
+      });
+    }
 
     let note = null;
     if (type === 'Fire') note = 'You have been removed from the staff hub.';
     if (type === 'Staff Blacklist') note = 'You have been blacklisted from staff and removed from the staff hub.';
 
     const embed = infractionEmbed(target, type, reason, issuer, note);
-    const s = getSettings(interaction.guild.id);
+    const { infractChannel } = hubSettings(interaction.guild.id);
 
     // DM the member first, before any kick (a kicked user cannot always be DM'd after).
     await target.send({ embeds: [embed] }).catch(() => {});
 
     let logged = true;
-    if (s.infractChannel) {
+    if (infractChannel) {
       try {
-        const channel = await interaction.client.channels.fetch(s.infractChannel);
+        const channel = await interaction.client.channels.fetch(infractChannel);
         await channel.send({ content: `<@${target.id}>`, embeds: [embed], allowedMentions: { users: [target.id] } });
       } catch (err) {
         logged = false;
@@ -54,24 +75,23 @@ module.exports = {
       logged = false;
     }
 
-    // Fire and Staff Blacklist kick the member from the staff hub.
     let kickNote = '';
-    if (type === 'Fire' || type === 'Staff Blacklist') {
-      const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+    if (kicks) {
+      const member = await hubGuild.members.fetch(target.id).catch(() => null);
       if (member) {
         try {
           await member.kick(`${type} by ${issuer.username}: ${reason}`);
-          kickNote = `\nKicked <@${target.id}> from the staff hub.`;
+          kickNote = `\nRemoved <@${target.id}> from the staff hub.`;
         } catch (err) {
-          kickNote = `\nCould not kick them (check my Kick Members permission and role position): ${err.message}`;
+          kickNote = `\nCould not remove them from the staff hub (check my Kick Members permission and role position there): ${err.message}`;
         }
       } else {
-        kickNote = '\n(User was not in the server to kick.)';
+        kickNote = '\n(They were not in the staff hub, so there was nobody to remove.)';
       }
     }
 
     await interaction.editReply({
-      content: `Logged **${type}** for <@${target.id}>.${logged ? '' : '\n(Could not log it - set an infraction channel with /config.)'}${kickNote}`,
+      content: `Logged **${type}** for <@${target.id}>.${logged ? '' : '\n(Could not log it. Set infract_channel with /config in the staff hub.)'}${kickNote}`,
     });
   },
 };

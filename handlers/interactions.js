@@ -17,15 +17,15 @@ async function handleButton(interaction) {
 }
 
 // A staff report was submitted. The button lives in the main server but the HR
-// forum lives in the staff hub, so the forum id is looked up across every guild
-// rather than out of this guild's own settings.
+// forum lives in the staff hub, so the forum id is read from the hub's settings
+// rather than out of this server's own.
 async function handleReport(interaction) {
   const fields = readReportFields(interaction);
 
   const forumId = findReportForum();
   if (!forumId) {
     return interaction.reply({
-      content: 'Staff reports are not set up yet. Ask an owner to set report_forum with /config in the staff hub.',
+      content: 'Staff reports are not set up yet. Ask an owner to run /config server:hub and set report_forum in the staff hub.',
       flags: MessageFlags.Ephemeral,
     });
   }

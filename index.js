@@ -6,6 +6,8 @@ const { handleButton, handleModal } = require('./handlers/interactions');
 const { isOwner } = require('./handlers/permissions');
 const { startAutoSync } = require('./git-sync');
 const { startHrPanel } = require('./handlers/hrpanel');
+const { startLeaveChecks } = require('./handlers/leave');
+const { logCommand } = require('./handlers/commandlog');
 
 const client = new Client({
   intents: [
@@ -40,12 +42,18 @@ client.once(Events.ClientReady, () => {
     onBeforeRestart: () => client.destroy(),
   }).catch((e) => console.error('[git-sync] failed to start:', e.message));
 
-  // The auto-updating HR panels. A problem here is logged and never takes the
+  // The auto-updating HR panels, and the check that returns people from leave
+  // when their end date passes. A problem in either is logged and never takes the
   // rest of the bot down with it.
   try {
     startHrPanel(client);
   } catch (e) {
     console.error('[hrpanel] failed to start:', e.message);
+  }
+  try {
+    startLeaveChecks(client);
+  } catch (e) {
+    console.error('[leave] failed to start:', e.message);
   }
 });
 
@@ -55,6 +63,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isModalSubmit()) return void (await handleModal(interaction));
 
     if (!interaction.isChatInputCommand()) return;
+
+    // Logged before it runs, and whether or not the person is allowed to use it.
+    // Not awaited: a slow or missing log channel must never delay the command.
+    logCommand({
+      client,
+      guild: interaction.guild,
+      channel: interaction.channel,
+      user: interaction.user,
+      name: interaction.commandName,
+    });
+
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
     await command.execute(interaction);
@@ -71,6 +90,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
   if (message.content.trim() !== '!sc') return;
+
+  logCommand({
+    client,
+    guild: message.guild,
+    channel: message.channel,
+    user: message.author,
+    name: 'sc',
+    type: 'Prefix command',
+  });
+
   if (!isOwner(message.author.id)) {
     return message.reply('Only the bot owners can sync commands.').catch(() => {});
   }

@@ -30,8 +30,8 @@ const FILE = path.join(DATA_DIR, 'settings.json');
 
 // Which settings belong to which server. /config uses these to refuse a setting
 // in the wrong server instead of quietly saving it where nothing will read it.
-const HUB_KEYS = ['staffLeadershipRole', 'promoteChannel', 'infractChannel', 'staffReportForum'];
-const MAIN_KEYS = ['staffReportChannel'];
+const HUB_KEYS = ['staffLeadershipRole', 'promoteChannel', 'infractChannel', 'staffReportForum', 'loaChannel'];
+const MAIN_KEYS = ['staffReportChannel', 'hrRole', 'logChannel'];
 // Settings every server may have its own copy of. Each server gets its own HR
 // panel, so the panel channel is set once in the hub and once in the main server.
 const BOTH_KEYS = ['hrPanelChannel'];

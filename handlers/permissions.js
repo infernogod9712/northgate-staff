@@ -62,4 +62,28 @@ function isPubliclyReadable(channel) {
   }
 }
 
-module.exports = { isOwner, isAdmin, canManageStaff, isPubliclyReadable };
+// Who may run the HR commands (/hire, /fire, /suspend, /unsuspend, /loalog,
+// /infract, /addnote and the rating commands): Administrators of the server they
+// are in, Staff Leadership in the hub, or the HR role in the MAIN server.
+//
+// The HR role is checked in the main server even when the command runs in the
+// hub, the same way Staff Leadership is always checked in the hub, so HR can use
+// their commands from either server.
+async function canManageHR(member) {
+  if (!member) return false;
+  if (await canManageStaff(member)) return true;
+
+  const { main } = getServers();
+  if (!main) return false;
+  const role = getSettings(main).hrRole;
+  if (!role) return false;
+
+  if (member.guild.id === main) return member.roles.cache.has(role);
+
+  const mainGuild = member.client.guilds.cache.get(main);
+  if (!mainGuild) return false;
+  const mainMember = await mainGuild.members.fetch(member.id).catch(() => null);
+  return !!mainMember && mainMember.roles.cache.has(role);
+}
+
+module.exports = { isOwner, isAdmin, canManageStaff, canManageHR, isPubliclyReadable };

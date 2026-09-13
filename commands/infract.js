@@ -1,97 +1,66 @@
-const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
-const { getServers, hubSettings } = require('../handlers/settings');
-const { canManageStaff } = require('../handlers/permissions');
+const { SlashCommandBuilder } = require('discord.js');
+const { hubSettings } = require('../handlers/settings');
 const { infractionEmbed } = require('../handlers/embeds');
+const { startHrCommand, explain } = require('../handlers/hrcommand');
+const { getWriter, formatDate } = require('../handlers/rosterWriter');
+const { postTo, dm } = require('../handlers/hrnotices');
 
 // /infract [user] [type] [reason]
-// Log-only for most types. Demotion does NOT remove roles. Fire and Staff
-// Blacklist also kick the member from the staff hub. All types share one embed;
-// only Type + Reason change.
+// Logs an infraction in the hub's infraction channel, DMs the member, and records
+// it on the roster: a Warning in the Warnings column, anything else in
+// Infractions. Nothing is overwritten.
 //
-// The kick always targets the staff hub, never the server the command was run
-// in. It used to use the current server, so a Fire run from the main server
-// removed the person from the whole community while their DM said "removed from
-// the staff hub". If no hub has been set, the kick is refused rather than guessed.
-const TYPES = ['Warning', 'Strike', 'Suspension', 'Demotion', 'Fire', 'Staff Blacklist'];
-const KICKS = ['Fire', 'Staff Blacklist'];
+// Fire and Staff Blacklist used to be types here. They moved to /fire, which also
+// moves the person to the Former Staff Roster, so there is one way to remove
+// someone from staff instead of two that do different things.
+const TYPES = ['Warning', 'Strike', 'Suspension', 'Demotion'];
 
 module.exports = {
   TYPES,
   data: new SlashCommandBuilder()
     .setName('infract')
-    .setDescription('Log an infraction against a staff member')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+    .setDescription('Log an infraction against a staff member and record it on the roster')
     .addUserOption((o) => o.setName('user').setDescription('The staff member being infracted').setRequired(true))
     .addStringOption((o) =>
       o.setName('type').setDescription('The type of infraction').setRequired(true)
         .addChoices(...TYPES.map((t) => ({ name: t, value: t }))))
-    .addStringOption((o) => o.setName('reason').setDescription('Reason for the infraction').setRequired(true)),
+    .addStringOption((o) => o.setName('reason').setDescription('Reason for the infraction').setRequired(true).setMaxLength(500)),
 
   async execute(interaction) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    if (!(await canManageStaff(interaction.member))) {
-      return interaction.editReply({ content: 'You need the Staff Leadership role to use this.' });
-    }
+    if (!(await startHrCommand(interaction))) return;
 
     const target = interaction.options.getUser('user');
     const type = interaction.options.getString('type');
-    const reason = interaction.options.getString('reason');
+    const reason = interaction.options.getString('reason').trim();
     const issuer = interaction.user;
-    const kicks = KICKS.includes(type);
 
-    // Refuse before anything is sent. A DM saying "you have been removed" followed
-    // by no removal is worse than no infraction at all.
-    const { hub } = getServers();
-    const hubGuild = hub ? interaction.client.guilds.cache.get(hub) : null;
-    if (kicks && !hubGuild) {
-      return interaction.editReply({
-        content: hub
-          ? `I am not in the staff hub any more, so I cannot remove them. Nothing was logged or sent.`
-          : `No staff hub is set, so I do not know which server to remove them from. Run \`/config server:hub\` in the staff hub first. Nothing was logged or sent.`,
-      });
-    }
-
-    let note = null;
-    if (type === 'Fire') note = 'You have been removed from the staff hub.';
-    if (type === 'Staff Blacklist') note = 'You have been blacklisted from staff and removed from the staff hub.';
-
-    const embed = infractionEmbed(target, type, reason, issuer, note);
-    const { infractChannel } = hubSettings(interaction.guild.id);
-
-    // DM the member first, before any kick (a kicked user cannot always be DM'd after).
-    await target.send({ embeds: [embed] }).catch(() => {});
-
-    let logged = true;
-    if (infractChannel) {
-      try {
-        const channel = await interaction.client.channels.fetch(infractChannel);
-        await channel.send({ content: `<@${target.id}>`, embeds: [embed], allowedMentions: { users: [target.id] } });
-      } catch (err) {
-        logged = false;
-        console.error('[infract] Could not post to infract channel:', err.message);
-      }
-    } else {
-      logged = false;
-    }
-
-    let kickNote = '';
-    if (kicks) {
-      const member = await hubGuild.members.fetch(target.id).catch(() => null);
-      if (member) {
-        try {
-          await member.kick(`${type} by ${issuer.username}: ${reason}`);
-          kickNote = `\nRemoved <@${target.id}> from the staff hub.`;
-        } catch (err) {
-          kickNote = `\nCould not remove them from the staff hub (check my Kick Members permission and role position there): ${err.message}`;
-        }
-      } else {
-        kickNote = '\n(They were not in the staff hub, so there was nobody to remove.)';
-      }
-    }
-
-    await interaction.editReply({
-      content: `Logged **${type}** for <@${target.id}>.${logged ? '' : '\n(Could not log it. Set infract_channel with /config in the staff hub.)'}${kickNote}`,
+    const embed = infractionEmbed(target, type, reason, issuer, null);
+    const dmed = await dm(target, embed);
+    const logged = await postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
+      content: `<@${target.id}>`,
+      embeds: [embed],
+      allowedMentions: { users: [target.id] },
     });
+
+    const field = type === 'Warning' ? 'warnings' : 'infractions';
+    let sheet;
+    try {
+      await getWriter().appendText({
+        discordId: target.id,
+        field,
+        line: `${type}: ${reason} (${formatDate(Date.now())}, by ${issuer.username})`,
+      });
+      sheet = `Added to their ${field === 'warnings' ? 'Warnings' : 'Infractions'} on the roster.`;
+    } catch (err) {
+      sheet = err.code === 'not_on_roster'
+        ? 'They are not on the Official Staff Roster, so the sheet was not updated.'
+        : explain(err, `<@${target.id}>`);
+    }
+
+    const lines = [`Logged **${type}** for <@${target.id}>.`];
+    if (!logged) lines.push('(Could not log it. Set infract_channel with /config in the staff hub.)');
+    lines.push(sheet);
+    if (!dmed) lines.push('Their DMs are closed, so they were not told.');
+    return interaction.editReply({ content: lines.join('\n') });
   },
 };

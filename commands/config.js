@@ -30,7 +30,10 @@ const OPTIONS = [
   ['promote_channel',  'promoteChannel',      'channel', 'Promotion Log'],
   ['infract_channel',  'infractChannel',      'channel', 'Infraction Log'],
   ['report_forum',     'staffReportForum',    'channel', 'Report Forum (HR)'],
+  ['loa_channel',      'loaChannel',          'channel', 'Leave Log'],
   ['report_channel',   'staffReportChannel',  'channel', 'Report Panel Channel'],
+  ['hr_role',          'hrRole',              'role',    'HR Role'],
+  ['log_channel',      'logChannel',          'channel', 'Command Log'],
   ['hr_panel_channel', 'hrPanelChannel',      'channel', 'HR Panel Channel'],
 ];
 
@@ -61,22 +64,33 @@ module.exports = {
       ))
     .addRoleOption((o) => o
       .setName('staff_leadership')
-      .setDescription('Staff hub: role allowed to use /promote and /infract'))
+      .setDescription('Staff hub: role allowed to use /promote and every HR command'))
     .addChannelOption((o) => o
       .setName('promote_channel')
       .setDescription('Staff hub: where promotions are logged')
       .addChannelTypes(ChannelType.GuildText))
     .addChannelOption((o) => o
       .setName('infract_channel')
-      .setDescription('Staff hub: where infractions are logged')
+      .setDescription('Staff hub: where infractions, suspensions and firings are logged')
       .addChannelTypes(ChannelType.GuildText))
     .addChannelOption((o) => o
       .setName('report_forum')
       .setDescription('Staff hub: the locked HR forum reports are filed in')
       .addChannelTypes(ChannelType.GuildForum))
     .addChannelOption((o) => o
+      .setName('loa_channel')
+      .setDescription('Staff hub: where leaves starting and ending are logged')
+      .addChannelTypes(ChannelType.GuildText))
+    .addChannelOption((o) => o
       .setName('report_channel')
       .setDescription('Main server: channel the staff report panel is posted in')
+      .addChannelTypes(ChannelType.GuildText))
+    .addRoleOption((o) => o
+      .setName('hr_role')
+      .setDescription('Main server: role allowed to use the HR commands'))
+    .addChannelOption((o) => o
+      .setName('log_channel')
+      .setDescription('Main server: where every command used in either server is logged')
       .addChannelTypes(ChannelType.GuildText))
     .addChannelOption((o) => o
       .setName('hr_panel_channel')

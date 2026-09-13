@@ -150,6 +150,19 @@ function world() {
   const { canManageStaff } = require(path.join(ROOT, 'handlers', 'permissions'));
   const { handleModal } = require(path.join(ROOT, 'handlers', 'interactions'));
 
+  // /promote and /infract now write to the roster. These tests are about Discord
+  // behaviour, so they get a writer that always succeeds. The real writer is tested
+  // against a simulated sheet in tools/check-hr.js.
+  require(path.join(ROOT, 'handlers', 'rosterWriter')).setWriter({
+    isConfigured: () => true,
+    hire: async () => ({ row: 1, department: 'Test' }),
+    fire: async () => ({ moved: 1, departments: ['Test'] }),
+    setRating: async () => ({ department: 'Test' }),
+    setRole: async () => ({ previous: 'Old Title', department: 'Test' }),
+    setStatus: async () => ({ previous: ['Active'], rows: 1 }),
+    appendText: async () => ({ rows: 1 }),
+  });
+
   // -------------------------------------------------------------------------
   section('Everything loads');
   // -------------------------------------------------------------------------
@@ -343,38 +356,8 @@ function world() {
     return { ...w, log, boss, target };
   }
 
-  await check('Fire run from the main server removes them from the hub, not the community', async () => {
-    const { client, main, hub, boss, target } = infractSetup();
-    const i = fakeInteraction({ client, guild: main, member: join(main, boss), user: boss, options: { user: target, type: 'Fire', reason: 'test' } });
-    await commands.infract.execute(i);
-    if (main.actions.some((a) => a[0] === 'kick')) return 'KICKED THEM FROM THE MAIN SERVER';
-    return hub.actions.some((a) => a[0] === 'kick' && a[1] === target.id) || `no hub kick. said: ${said(i)}`;
-  });
-
-  await check('Staff Blacklist also removes from the hub only', async () => {
-    const { client, main, hub, boss, target } = infractSetup();
-    const i = fakeInteraction({ client, guild: main, member: join(main, boss), user: boss, options: { user: target, type: 'Staff Blacklist', reason: 'test' } });
-    await commands.infract.execute(i);
-    if (main.actions.some((a) => a[0] === 'kick')) return 'KICKED THEM FROM THE MAIN SERVER';
-    return hub.actions.some((a) => a[0] === 'kick') || said(i);
-  });
-
-  // A DM saying "you have been removed" followed by no removal is worse than
-  // no infraction at all.
-  await check('Fire with no hub marked kicks nobody, DMs nobody and logs nothing', async () => {
-    const w = world();
-    settings.updateSettings(MAIN, { staffLeadershipRole: LEAD, infractChannel: CH_INFRACT });
-    const log = fakeChannel(w.client, CH_INFRACT);
-    const boss = fakeUser('700000000000000011');
-    const target = fakeUser('800000000000000002');
-    join(w.main, target);
-    const i = fakeInteraction({ client: w.client, guild: w.main, member: join(w.main, boss, [LEAD]), user: boss, options: { user: target, type: 'Fire', reason: 'test' } });
-    await commands.infract.execute(i);
-    if (w.main.actions.length || w.hub.actions.length) return 'kicked somebody';
-    if (target.dms.length) return 'sent a removal DM with no removal';
-    if (log.sent.length) return 'logged an infraction that was refused';
-    return /No staff hub is set/.test(said(i)) || said(i);
-  });
+  // Fire and Staff Blacklist moved from /infract to /fire. "Removes them from the
+  // hub, never the community" is tested against /fire in tools/check-hr.js.
 
   await check('a Warning never removes anybody', async () => {
     const { client, main, hub, boss, target } = infractSetup();
@@ -404,7 +387,7 @@ function world() {
     const targetInMain = join(w.main, target);
     const i = fakeInteraction({
       client: w.client, guild: w.main, member: join(w.main, boss), user: boss,
-      options: { user: target, rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     if (!targetInMain.roles.cache.has(RANK)) return `rank not given. said: ${said(i)}`;
@@ -421,7 +404,7 @@ function world() {
     join(w.hub, target);
     const i = fakeInteraction({
       client: w.client, guild: w.hub, member: w.hub.members.store.get(boss.id), user: boss,
-      options: { user: target, rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     if (/staffserver/.test(said(i))) return 'still points at /staffserver, which does not exist';
@@ -444,7 +427,7 @@ function world() {
     join(w.main, target);
     const i = fakeInteraction({
       client: w.client, guild: w.main, member: join(w.main, boss, [LEAD]), user: boss,
-      options: { user: target, rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     return log.sent.length === 1 || `log received ${log.sent.length}. said: ${said(i)}`;

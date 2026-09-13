@@ -21,8 +21,12 @@ const config = {
   roster: {
     sheetId: process.env.ROSTER_SHEET_ID || '1zgKYe984COJd25PktpU7mmaPD0ikvKa0vOincAjWVRg',
     tab: process.env.ROSTER_TAB || 'OFFICAL STAFF ROSTER',
+    formerTab: process.env.ROSTER_FORMER_TAB || 'FORMER STAFF ROSTER',
     credentialsFile: process.env.GOOGLE_CREDENTIALS_FILE || path.join(__dirname, 'credentials.json'),
   },
+  // Linked from the /hire welcome message.
+  handbookUrl: process.env.STAFF_HANDBOOK_URL
+    || 'https://docs.google.com/document/d/1vZx8tigurY7glO708EA4MByUBj-mORu_FrLJ_tTajAY/edit?usp=drivesdk',
   hrPanel: {
     intervalSeconds: Number(process.env.HR_PANEL_INTERVAL) || 30,
   },

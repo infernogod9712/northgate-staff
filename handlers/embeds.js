@@ -12,7 +12,7 @@ function withFooter(embed, text, iconURL) {
 }
 
 // ── Staff actions ─────────────────────────────────────────────────────────────
-function promotionEmbed(target, rank, reason, issuer) {
+function promotionEmbed(target, rank, reason, issuer, title) {
   return withFooter(new EmbedBuilder()
     .setColor(COLORS.promote)
     .setTitle('Staff Promotion')
@@ -21,6 +21,7 @@ function promotionEmbed(target, rank, reason, issuer) {
     .addFields(
       { name: 'Staff Member', value: `<@${target.id}>`, inline: true },
       { name: 'New Rank', value: `<@&${rank.id}>`, inline: true },
+      ...(title ? [{ name: 'Title', value: title, inline: true }] : []),
       { name: 'Reason', value: reason, inline: false },
     ),
     `Promotion issued by ${issuer.username}`, issuer.displayAvatarURL());

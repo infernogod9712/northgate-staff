@@ -229,4 +229,10 @@ async function snapshotEmbed(client) {
   return buildPanelEmbed(await p.state(p.intervalMs), { live: false });
 }
 
-module.exports = { createHrPanel, buildPanelEmbed, getPanel, setPanel, startHrPanel, snapshotEmbed };
+// A roster change made through a bot command should show on the panels straight
+// away, not up to 30 seconds later. Does nothing before the panel has started.
+function refreshSoon() {
+  if (panel) Promise.resolve(panel.tick()).catch(() => {});
+}
+
+module.exports = { createHrPanel, buildPanelEmbed, getPanel, setPanel, startHrPanel, snapshotEmbed, refreshSoon };

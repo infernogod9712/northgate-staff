@@ -58,6 +58,41 @@ async function postTo(client, channelId, payload) {
   }
 }
 
+// The leave log is a forum. Each leave gets its own post, and everything that
+// happens to that leave afterwards (a new end date, ending early, ending by
+// itself) is added INSIDE that post, so HR can read one person's leave from start
+// to finish in one place instead of hunting through a channel.
+//
+// Returns { ok, threadId, error }. The caller remembers threadId with the leave.
+// If the remembered post has been deleted or can no longer be posted in, a new
+// post is started rather than the update being lost. A plain text channel still
+// works too, for a server whose leave log was set before it became a forum.
+async function postLeave(client, channelId, { title, payload, threadId }) {
+  if (threadId) {
+    try {
+      const thread = await client.channels.fetch(threadId);
+      await thread.send(payload);
+      return { ok: true, threadId };
+    } catch {
+      // Gone or locked. Fall through and start a new post.
+    }
+  }
+
+  if (!channelId) return { ok: false, threadId: null, error: 'no leave forum is set' };
+  try {
+    const channel = await client.channels.fetch(channelId);
+    // A forum channel can make posts but has no send() of its own.
+    if (typeof channel.send !== 'function' && channel.threads?.create) {
+      const thread = await channel.threads.create({ name: title.slice(0, 100), message: payload });
+      return { ok: true, threadId: thread.id };
+    }
+    await channel.send(payload);
+    return { ok: true, threadId: null };
+  } catch (err) {
+    return { ok: false, threadId: null, error: err.message };
+  }
+}
+
 async function dm(user, embed) {
   try {
     await user.send({ embeds: [embed] });
@@ -76,23 +111,26 @@ async function leaveEnded(client, { discordId, entry, outcome }) {
       ? `Their ${what} end date has passed, but their status had already been changed, so it was left as it is.`
       : `Their ${what} end date has passed, but they are no longer on the Official Staff Roster.`;
 
+  const user = await client.users.fetch(discordId).catch(() => null);
   const embed = new EmbedBuilder()
     .setColor(outcome === 'returned' ? COLORS.promote : COLORS.info)
     .setTitle('Leave Ended')
     .setDescription(`<@${discordId}>: ${text}`)
     .setTimestamp();
-  await postTo(client, hubSettings().loaChannel, { embeds: [embed], allowedMentions: { parse: [] } });
 
-  if (outcome === 'returned') {
-    const user = await client.users.fetch(discordId).catch(() => null);
-    if (user) {
-      await dm(user, new EmbedBuilder()
-        .setColor(COLORS.promote)
-        .setTitle('Welcome back')
-        .setDescription(`Your ${what} has ended and your status is back to Active. Welcome back to the team!`)
-        .setTimestamp());
-    }
+  await postLeave(client, hubSettings().loaChannel, {
+    title: `${what} - ${user?.username || discordId}`,
+    payload: { embeds: [embed], allowedMentions: { parse: [] } },
+    threadId: entry.threadId,
+  });
+
+  if (outcome === 'returned' && user) {
+    await dm(user, new EmbedBuilder()
+      .setColor(COLORS.promote)
+      .setTitle('Welcome back')
+      .setDescription(`Your ${what} has ended and your status is back to Active. Welcome back to the team!`)
+      .setTimestamp());
   }
 }
 
-module.exports = { welcomeEmbed, actionEmbed, postTo, dm, leaveEnded };
+module.exports = { welcomeEmbed, actionEmbed, postTo, postLeave, dm, leaveEnded };

@@ -30,7 +30,7 @@ const OPTIONS = [
   ['promote_channel',  'promoteChannel',      'channel', 'Promotion Log'],
   ['infract_channel',  'infractChannel',      'channel', 'Infraction Log'],
   ['report_forum',     'staffReportForum',    'channel', 'Report Forum (HR)'],
-  ['loa_channel',      'loaChannel',          'channel', 'Leave Log'],
+  ['loa_channel',      'loaChannel',          'channel', 'Leave Forum'],
   ['report_channel',   'staffReportChannel',  'channel', 'Report Panel Channel'],
   ['hr_role',          'hrRole',              'role',    'HR Role'],
   ['log_channel',      'logChannel',          'channel', 'Command Log'],
@@ -79,8 +79,8 @@ module.exports = {
       .addChannelTypes(ChannelType.GuildForum))
     .addChannelOption((o) => o
       .setName('loa_channel')
-      .setDescription('Staff hub: where leaves starting and ending are logged')
-      .addChannelTypes(ChannelType.GuildText))
+      .setDescription('Staff hub: forum where each leave gets its own post')
+      .addChannelTypes(ChannelType.GuildForum))
     .addChannelOption((o) => o
       .setName('report_channel')
       .setDescription('Main server: channel the staff report panel is posted in')

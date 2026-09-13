@@ -25,7 +25,7 @@ everything still logs in the hub.
 5. Send `!sc` in any server the bot is in to register the slash commands. Only the
    two owner ids can run it. Global commands take up to about an hour to appear.
 6. **In the staff hub:** `/config server:hub`, plus `staff_leadership`,
-   `promote_channel`, `infract_channel`, `report_forum` and `loa_channel`. They can
+   `promote_channel`, `infract_channel`, `report_forum` and `loa_channel` (a forum). They can
    all go in the same command.
 7. **In the main server:** `/config server:main`, plus `report_channel`, `hr_role`
    and `log_channel`, then `/reportembed` to post the panel.
@@ -118,7 +118,9 @@ commands ask for the `department` when it is needed. `/fire` moves every row.
 length (`7d`, `2w`). A check every minute puts them back to Active once it passes,
 remembered in `data/leave.json` across restarts. It only undoes its own change: if
 HR has set them to something else in the meantime, such as Suspended, it is left
-alone and the leave log says so.
+alone and the leave log says so. The leave log is a forum: each leave gets its own
+post, and a new end date, ending it early, or the bot ending it are all added inside
+that same post.
 
 **Command log.** Every command used in the hub or the main server is posted to the
 main server's `log_channel`: the command, who ran it, where, and when. Never what

@@ -13,7 +13,8 @@
 // passed would be the worst thing this file could do.
 //
 // Remembered in data/leave.json, so a restart on the Pi does not forget anyone's
-// return date. data/ is gitignored.
+// return date. Each leave also remembers its post in the leave forum, so later
+// updates about it land in the same post. data/ is gitignored.
 
 const fs = require('fs');
 const path = require('path');
@@ -80,9 +81,25 @@ function createLeaveManager({ writer, now = () => Date.now(), log = console, onE
     }
     const store = readStore();
     const previous = store[discordId] || null;
-    store[discordId] = { status, until, reason: reason || null, setBy: by, setAt: now() };
+    store[discordId] = {
+      status,
+      until,
+      reason: reason || null,
+      setBy: by,
+      setAt: now(),
+      // Keep the existing forum post, so a new end date is added to the same leave.
+      threadId: previous?.threadId || null,
+    };
     writeStore(store);
     return { previous };
+  }
+
+  // Remember which forum post belongs to this leave.
+  function attachThread(discordId, threadId) {
+    const store = readStore();
+    if (!store[discordId]) return;
+    store[discordId].threadId = threadId;
+    writeStore(store);
   }
 
   async function end({ discordId }) {
@@ -140,7 +157,7 @@ function createLeaveManager({ writer, now = () => Date.now(), log = console, onE
     timer = null;
   }
 
-  return { begin, end, checkDue, start, stop, list: readStore };
+  return { begin, attachThread, end, checkDue, start, stop, list: readStore };
 }
 
 let manager = null;

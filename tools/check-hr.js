@@ -306,6 +306,23 @@ function fakeChannel(client, id) {
   return c;
 }
 
+// A forum channel: it has no send() of its own, only posts, and each post is a
+// thread that can be sent to.
+function fakeForum(client, id) {
+  const f = { id, posts: [] };
+  f.threads = {
+    create: async ({ name, message }) => {
+      const thread = { id: `8${String(f.posts.length + 1).padStart(17, '0')}`, name, messages: [message] };
+      thread.send = async (payload) => { thread.messages.push(payload); return {}; };
+      f.posts.push(thread);
+      client._channels.set(thread.id, thread);
+      return thread;
+    },
+  };
+  client._channels.set(id, f);
+  return f;
+}
+
 function fakeClient() {
   const channels = new Map();
   const users = new Map();
@@ -384,7 +401,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     settings.setServer('hub', HUB);
     settings.updateSettings(HUB, { staffLeadershipRole: LEAD, infractChannel: CH.infract, loaChannel: CH.loa });
     settings.updateSettings(MAIN, { hrRole: HR, logChannel: CH.log });
-    const ch = { infract: fakeChannel(client, CH.infract), loa: fakeChannel(client, CH.loa), log: fakeChannel(client, CH.log), here: fakeChannel(client, CH.here) };
+    const ch = { infract: fakeChannel(client, CH.infract), loa: fakeForum(client, CH.loa), log: fakeChannel(client, CH.log), here: fakeChannel(client, CH.here) };
 
     const hrUser = fakeUser('700000000000000001', 'hrperson');
     const hrMember = join(main, hrUser, [HR]);
@@ -856,7 +873,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     if (w.sheet.rowsFor(OFFICIAL, ID.B)[0].status !== 'Leave of Absense') return `status not set. said: ${said(i)}`;
     const store = JSON.parse(fs.readFileSync(path.join(DATA, 'leave.json'), 'utf8'));
     if (!store[ID.B]) return 'end date not remembered';
-    return w.ch.loa.sent.length === 1 || 'not logged';
+    return w.ch.loa.posts.length === 1 || `made ${w.ch.loa.posts.length} forum posts`;
   });
 
   await check('/loalog without an end date changes nothing', async () => {
@@ -880,6 +897,52 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return w.sheet.rowsFor(OFFICIAL, ID.B)[0].status === 'Active ' || w.sheet.rowsFor(OFFICIAL, ID.B)[0].status;
   });
 
+  await check('loa_channel only accepts forum channels', () => {
+    const option = cmd('config').data.toJSON().options.find((o) => o.name === 'loa_channel');
+    return JSON.stringify(option.channel_types) === '[15]' || `channel types ${JSON.stringify(option.channel_types)}`;
+  });
+
+  await check('each leave gets its own forum post, named after the leave', async () => {
+    const w = world();
+    await run(w, 'loalog', { user: fakeUser(ID.B, 'bravo'), action: 'loa', until: '14d' });
+    const post = w.ch.loa.posts[0];
+    return (post && /^Leave of Absence - bravo$/.test(post.name)) || `post name ${post?.name}`;
+  });
+
+  await check('ending a leave early is added inside the same forum post', async () => {
+    const w = world();
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'loa', until: '14d' });
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'end' });
+    if (w.ch.loa.posts.length !== 1) return `made ${w.ch.loa.posts.length} posts`;
+    return w.ch.loa.posts[0].messages.length === 2 || `the post has ${w.ch.loa.posts[0].messages.length} messages`;
+  });
+
+  await check('a new end date for someone already away is added to their existing post', async () => {
+    const w = world();
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'loa', until: '7d' });
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'loa', until: '21d' });
+    if (w.ch.loa.posts.length !== 1) return `made ${w.ch.loa.posts.length} posts`;
+    return w.ch.loa.posts[0].messages.length === 2 || `the post has ${w.ch.loa.posts[0].messages.length} messages`;
+  });
+
+  await check('a leave ending by itself is added inside its forum post', async () => {
+    const w = world();
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'loa', until: '14d' });
+    const entry = JSON.parse(fs.readFileSync(path.join(DATA, 'leave.json'), 'utf8'))[ID.B];
+    if (!entry.threadId) return 'the leave did not remember its post';
+    await require(path.join(ROOT, 'handlers', 'hrnotices')).leaveEnded(w.client, { discordId: ID.B, entry, outcome: 'returned' });
+    if (w.ch.loa.posts.length !== 1) return `made ${w.ch.loa.posts.length} posts`;
+    return w.ch.loa.posts[0].messages.length === 2 || `the post has ${w.ch.loa.posts[0].messages.length} messages`;
+  });
+
+  await check('if the leave\'s post was deleted, a new post is started instead of losing the update', async () => {
+    const w = world();
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'loa', until: '14d' });
+    w.client._channels.delete(w.ch.loa.posts[0].id);
+    await run(w, 'loalog', { user: fakeUser(ID.B), action: 'end' });
+    return w.ch.loa.posts.length === 2 || `made ${w.ch.loa.posts.length} posts`;
+  });
+
   // =========================================================================
   section('/addnote, ratings, /infract, /promote');
   // =========================================================================
@@ -888,7 +951,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     await run(w, 'addnote', { user: fakeUser(ID.B), note: 'handled well' });
     const [row] = w.sheet.rowsFor(OFFICIAL, ID.B);
     if (!/\(hrperson\): handled well$/.test(row.notes)) return `note was ${JSON.stringify(row.notes)}`;
-    const posted = Object.values(w.ch).reduce((sum, c) => sum + c.sent.length, 0);
+    const posted = Object.values(w.ch).reduce((sum, c) => sum + (c.sent ? c.sent.length : 0) + (c.posts ? c.posts.length : 0), 0);
     return posted === 0 || `posted ${posted} messages`;
   });
 

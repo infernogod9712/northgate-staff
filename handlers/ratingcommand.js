@@ -1,5 +1,5 @@
 // ratingcommand.js
-// /setperformancerating and /setactivityrating are the same command pointed at
+// /setperformancerating and /setactivityrating are the same command pointed at 
 // different columns, so both are built here.
 
 const { SlashCommandBuilder } = require('discord.js');

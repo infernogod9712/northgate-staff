@@ -73,6 +73,7 @@ const ID = {
   D: '444444444444444444', // on leave
   E: '555555555555555555', // the last row of the whole table
   F: '666666666666666666', // already on the Former roster
+  G: '676767676767676767', // already on the Former roster, its last row
   NEW: '777777777777777777',
   NEW2: '888888888888888888',
   STRANGER: '999999999999999999',
@@ -112,23 +113,30 @@ function makeSheet() {
         person({ nick: 'Echo', id: ID.E, status: 'Reduced Activity ' }),
       ],
     },
+    // Like the real one, the Former roster has its OWN department headers, not the
+    // same list as the Official roster: here Community Outreach is missing.
     [FORMER]: {
       sheetId: 564398058,
-      table: { name: 'Table1_2', startRowIndex: 1, endRowIndex: 5 },
+      table: { name: 'Table1_2', startRowIndex: 1, endRowIndex: 10 },
       options: FORMER_STATUS,
       rows: [
         [s('NGC logo')],
         header,
-        person({ nick: 'Foxtrot', id: ID.F, status: 'Terminated' }),
-        blankRow(),
-        blankRow(),
+        sectionRow('Studio Executive Ownership'), // row 3
+        blankRow(), // row 4
+        sectionRow('STUDIO DEVELOPMENT TEAM'), // row 5
+        person({ nick: 'Foxtrot', id: ID.F, status: 'Terminated' }), // row 6
+        sectionRow('Human Resources & Staff Operations'), // row 7
+        blankRow(), // row 8
+        sectionRow('PUBLIC RELATIONS TEAM'), // row 9
+        person({ nick: 'Golf', id: ID.G, status: 'Retired' }), // row 10, the last row of the table
       ],
     },
   };
   // The first Alpha row's status, set here so the literal stays readable above.
   model[OFFICIAL].rows[3][6] = s('Active ');
 
-  const calls = { batch: 0, gets: 0 };
+  const calls = { batch: 0, gets: 0, lastRequests: [] };
   let failNextWrite = null;
 
   const byId = (sheetId) => Object.entries(model).find(([, t]) => t.sheetId === sheetId);
@@ -174,6 +182,13 @@ function makeSheet() {
       });
       return;
     }
+    if (request.copyPaste) {
+      // Formatting is not simulated. The request only has to point at real rows.
+      const { source, destination, pasteType } = request.copyPaste;
+      if (pasteType !== 'PASTE_FORMAT') throw new Error(`the simulated sheet only copies formats, not ${pasteType}`);
+      if (source.sheetId !== destination.sheetId) throw new Error('copyPaste across tabs');
+      return;
+    }
     throw new Error(`the simulated sheet does not support ${Object.keys(request)[0]}`);
   }
 
@@ -196,6 +211,7 @@ function makeSheet() {
       }
       for (const key of Object.keys(model)) model[key] = draft[key];
       calls.batch += 1;
+      calls.lastRequests = requests;
       return reply(200, {});
     }
 
@@ -347,8 +363,9 @@ function fakeGuild(id, client, name) {
 
 function join(guild, user, roleIds = [], admin = false) {
   guild.client._users.set(user.id, user);
-  const m = { id: user.id, user, guild, client: guild.client, displayName: user.username, permissions: { has: () => admin }, roles: { cache: new Set(roleIds), added: [] } };
+  const m = { id: user.id, user, guild, client: guild.client, displayName: user.username, permissions: { has: () => admin }, roles: { cache: new Set(roleIds), added: [], removed: [] } };
   m.roles.add = async (roleId) => { m.roles.cache.add(roleId); m.roles.added.push(roleId); };
+  m.roles.remove = async (roleId) => { m.roles.cache.delete(roleId); m.roles.removed.push(roleId); };
   m.kick = async () => { guild.kicked.push(user.id); guild.members.store.delete(user.id); };
   guild.members.store.set(user.id, m);
   return m;
@@ -500,28 +517,109 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   // =========================================================================
   section('The roster writer: firing');
   // =========================================================================
-  await check('firing moves every row they have to the Former roster', async () => {
+  const EXEC = 'Studio Executive Ownership';
+  const DEV = 'STUDIO DEVELOPMENT TEAM';
+  const CO = 'COMMUNITY OUTREACH DEPARTMENT';
+  const PR = 'PUBLIC RELATIONS TEAM';
+  const HRS = 'Human Resources & Staff Operations';
+  const fireIn = (w, discordId, section, extra = {}) => w.writer.fire({ discordId, section, type: 'Terminated', reason: 'r', by: 'hr', date: 'Today', ...extra });
+
+  await check('firing from one department moves only that row, under the same department on the Former roster', async () => {
     const w = world();
-    await w.writer.fire({ discordId: ID.A, type: 'Terminated', reason: 'test reason', by: 'hrperson', date: 'Today' });
-    if (w.sheet.rowsFor(OFFICIAL, ID.A).length) return 'still on the Official roster';
+    const result = await fireIn(w, ID.A, DEV, { reason: 'test reason', by: 'hrperson' });
+    const left = w.sheet.rowsFor(OFFICIAL, ID.A);
+    if (left.length !== 1 || left[0].department !== EXEC) return `Official now has ${JSON.stringify(left.map((r) => r.department))}`;
     const moved = w.sheet.rowsFor(FORMER, ID.A);
-    if (moved.length !== 2) return `${moved.length} rows reached the Former roster, expected 2`;
-    return moved.every((r) => r.status === 'Terminated') || JSON.stringify(moved.map((r) => r.status));
+    if (moved.length !== 1) return `${moved.length} rows reached the Former roster, expected 1`;
+    if (moved[0].department !== DEV) return `landed under ${moved[0].department} on the Former roster`;
+    if (moved[0].status !== 'Terminated') return `status ${moved[0].status}`;
+    return JSON.stringify(result.remaining) === JSON.stringify([EXEC]) || `remaining ${JSON.stringify(result.remaining)}`;
+  });
+
+  await check('it never lands in the first empty row of some other department (the bug)', async () => {
+    const w = world();
+    // The Former roster's first empty row is under Executive Ownership.
+    await fireIn(w, ID.D, PR);
+    const [moved] = w.sheet.rowsFor(FORMER, ID.D);
+    return moved?.department === PR || `landed under ${moved?.department}`;
+  });
+
+  await check('an empty placeholder row in that Former department is filled, not a new row', async () => {
+    const w = world();
+    const before = w.sheet.model[FORMER].table.endRowIndex;
+    await fireIn(w, ID.E, HRS);
+    const [moved] = w.sheet.rowsFor(FORMER, ID.E);
+    if (moved?.department !== HRS) return `landed under ${moved?.department}`;
+    if (moved.row !== 8) return `row ${moved.row}, the placeholder was row 8`;
+    return w.sheet.model[FORMER].table.endRowIndex === before || 'the table grew when a blank was available';
+  });
+
+  await check('a Former department with no empty row gets one inserted directly under its last person', async () => {
+    const w = world();
+    await fireIn(w, ID.A, DEV);
+    const [moved] = w.sheet.rowsFor(FORMER, ID.A);
+    if (moved.row !== 7) return `row ${moved.row}, expected 7`;
+    return w.sheet.rowsFor(FORMER, ID.F)[0].department === DEV || 'Foxtrot moved out of Development';
+  });
+
+  await check('a Former department that runs to the last row of the table still gets them inside the table', async () => {
+    const w = world();
+    await fireIn(w, ID.D, PR);
+    const people = w.sheet.peopleIn(FORMER);
+    const delta = people.find((p) => p.id === ID.D);
+    const golf = people.find((p) => p.id === ID.G);
+    if (!delta) return 'not inside the Former table';
+    return (delta.department === PR && golf?.department === PR) || JSON.stringify([delta.department, golf?.department]);
+  });
+
+  await check('a department the Former roster does not have gets its header added, in the Official order', async () => {
+    const w = world();
+    const result = await fireIn(w, ID.B, CO);
+    if (!result.addedSection) return 'did not say it added a section';
+    const [moved] = w.sheet.rowsFor(FORMER, ID.B);
+    if (moved?.department !== CO) return `landed under ${moved?.department}`;
+    // Official order is Executive Ownership, Community Outreach, Development, so
+    // the new header goes directly above Development.
+    const tab = w.sheet.model[FORMER];
+    const text = (r) => tab.rows[r - 1]?.[0]?.userEnteredValue?.stringValue;
+    if (text(5) !== CO || text(7) !== DEV) return `rows 5..7 read ${JSON.stringify([text(5), text(6), text(7)])}`;
+    if (tab.rows[4][6]?.userEnteredValue) return 'the new header row has a status, so it would read as a person';
+    const paste = w.sheet.calls.lastRequests.find((r) => r.copyPaste)?.copyPaste;
+    if (!paste) return 'the header formatting was not copied';
+    return (paste.destination.startRowIndex === 4 && paste.source.startRowIndex === 6) || `copied row ${paste.source.startRowIndex + 1} onto row ${paste.destination.startRowIndex + 1}`;
+  });
+
+  await check('with no department after it to go above, nothing changes and it says why', async () => {
+    const w = world();
+    // Take the Human Resources header off the Former roster. It is the last
+    // department on the Official roster, so there is nothing to put it above.
+    w.sheet.model[FORMER].rows[6] = blankRow();
+    const before = w.sheet.snapshot();
+    const err = await rejects(fireIn(w, ID.E, HRS));
+    if (err?.code !== 'no_section') return `got ${err?.code || 'no error'}`;
+    return w.sheet.snapshot() === before || 'the sheet changed';
+  });
+
+  await check('firing from a department they are not in changes nothing', async () => {
+    const w = world();
+    const before = w.sheet.snapshot();
+    const err = await rejects(fireIn(w, ID.B, DEV));
+    if (err?.code !== 'not_in_department') return `got ${err?.code || 'no error'}`;
+    return w.sheet.snapshot() === before || 'the sheet changed';
   });
 
   await check('the move is a single all-or-nothing change', async () => {
     const w = world();
     const before = w.sheet.calls.batch;
-    await w.writer.fire({ discordId: ID.A, type: 'Retired', reason: 'r', by: 'hr', date: 'Today' });
+    await fireIn(w, ID.B, CO, { type: 'Retired' });
     return w.sheet.calls.batch - before === 1 || `took ${w.sheet.calls.batch - before} separate writes`;
   });
 
   await check('their ratings, title and history move with them, and the reason is added to Notes', async () => {
     const w = world();
-    await w.writer.fire({ discordId: ID.A, type: 'Retired', reason: 'moving on', by: 'hrperson', date: 'Today' });
-    const moved = w.sheet.rowsFor(FORMER, ID.A);
-    const dev = moved.find((r) => r.roles === 'Developer');
-    if (!dev) return 'the Developer row did not keep its title';
+    await fireIn(w, ID.A, DEV, { type: 'Retired', reason: 'moving on', by: 'hrperson' });
+    const [dev] = w.sheet.rowsFor(FORMER, ID.A);
+    if (dev?.roles !== 'Developer') return 'the Developer row did not keep its title';
     if (dev.perf?.numberValue !== 2) return `rating became ${JSON.stringify(dev.perf)}`;
     return /Retired by hrperson\. moving on/.test(dev.notes) || `notes: ${dev.notes}`;
   });
@@ -530,24 +628,15 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     const w = world();
     const before = w.sheet.snapshot();
     w.sheet.failNextWrite(500);
-    const err = await rejects(w.writer.fire({ discordId: ID.A, type: 'Terminated', reason: 'r', by: 'hr', date: 'Today' }));
+    const err = await rejects(fireIn(w, ID.B, CO));
     if (!err) return 'no error';
     return w.sheet.snapshot() === before || 'the sheet was half changed';
-  });
-
-  await check('with too few empty Former rows, new ones are added inside that table', async () => {
-    const w = world();
-    // Use up one of the Former roster's two blank rows first.
-    await w.writer.fire({ discordId: ID.B, type: 'Retired', reason: 'r', by: 'hr', date: 'Today' });
-    await w.writer.fire({ discordId: ID.A, type: 'Retired', reason: 'r', by: 'hr', date: 'Today' });
-    const moved = w.sheet.rowsFor(FORMER, ID.A);
-    return moved.length === 2 || `only ${moved.length} of 2 rows are inside the Former table`;
   });
 
   await check('firing someone not on the roster changes nothing at all', async () => {
     const w = world();
     const before = w.sheet.snapshot();
-    const err = await rejects(w.writer.fire({ discordId: ID.STRANGER, type: 'Retired', reason: 'r', by: 'hr', date: 'Today' }));
+    const err = await rejects(fireIn(w, ID.STRANGER, DEV, { type: 'Retired' }));
     if (err?.code !== 'not_on_roster') return `got ${err?.code || 'no error'}`;
     return w.sheet.snapshot() === before || 'the sheet changed';
   });
@@ -789,35 +878,52 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   // =========================================================================
   section('/fire');
   // =========================================================================
-  function fireSetup(w) {
-    const target = fakeUser(ID.A, 'alpha');
+  function fireSetup(w, id = ID.B) {
+    const target = fakeUser(id, 'someone');
     join(w.main, target, []);
     join(w.hub, target, []);
     return target;
   }
 
-  await check('/fire moves them to the Former roster and removes them from the hub, not the community', async () => {
+  await check('/fire asks for the department, and it is required', () => {
+    const opt = cmd('fire').data.toJSON().options.find((o) => o.name === 'department');
+    if (!opt) return 'no department option';
+    return opt.required === true || 'department is optional';
+  });
+
+  await check('/fire from their only department moves them and removes them from the hub, not the community', async () => {
     const w = world();
     const target = fireSetup(w);
-    const i = await run(w, 'fire', { user: target, type: 'Terminated', reason: 'test' });
-    if (w.sheet.rowsFor(OFFICIAL, ID.A).length) return `still on the roster. said: ${said(i)}`;
-    if (w.main.kicked.includes(ID.A)) return 'REMOVED THEM FROM THE MAIN SERVER';
-    return w.hub.kicked.includes(ID.A) || `not removed from the hub. said: ${said(i)}`;
+    const i = await run(w, 'fire', { user: target, department: 'community_outreach', type: 'Terminated', reason: 'test' });
+    if (w.sheet.rowsFor(OFFICIAL, ID.B).length) return `still on the roster. said: ${said(i)}`;
+    if (w.sheet.rowsFor(FORMER, ID.B)[0]?.department !== CO) return 'not under Community Outreach on the Former roster';
+    if (w.main.kicked.includes(ID.B)) return 'REMOVED THEM FROM THE MAIN SERVER';
+    return w.hub.kicked.includes(ID.B) || `not removed from the hub. said: ${said(i)}`;
+  });
+
+  await check('/fire from one of two departments keeps them in the hub and says where they still are', async () => {
+    const w = world();
+    const target = fireSetup(w, ID.A);
+    const i = await run(w, 'fire', { user: target, department: 'development', type: 'Terminated', reason: 'test' });
+    if (w.sheet.rowsFor(OFFICIAL, ID.A).length !== 1) return 'the other department row was touched';
+    if (w.hub.kicked.length) return 'removed someone who is still staff from the hub';
+    return /still listed under Executive Ownership/.test(said(i)) || said(i);
   });
 
   await check('/fire Retired also removes them from the hub', async () => {
     const w = world();
     const target = fireSetup(w);
-    await run(w, 'fire', { user: target, type: 'Retired', reason: 'test' });
-    return w.hub.kicked.includes(ID.A) || 'retired person was left in the hub';
+    await run(w, 'fire', { user: target, department: 'community_outreach', type: 'Retired', reason: 'test' });
+    return w.hub.kicked.includes(ID.B) || 'retired person was left in the hub';
   });
 
-  await check('/fire DMs them before removing them, and logs it in the hub', async () => {
+  await check('/fire DMs them before removing them, and logs it in the hub with the department', async () => {
     const w = world();
     const target = fireSetup(w);
-    await run(w, 'fire', { user: target, type: 'Terminated', reason: 'test' });
+    await run(w, 'fire', { user: target, department: 'community_outreach', type: 'Terminated', reason: 'test' });
     if (!target.dms.length) return 'no DM';
-    return w.ch.infract.sent.length === 1 || `logged ${w.ch.infract.sent.length} times`;
+    if (w.ch.infract.sent.length !== 1) return `logged ${w.ch.infract.sent.length} times`;
+    return payloadText(w.ch.infract.sent[0]).includes('Community Outreach') || 'the log does not name the department';
   });
 
   await check('/fire with no hub marked changes nothing, removes nobody and tells nobody', async () => {
@@ -827,7 +933,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     all.servers.hub = null;
     fs.writeFileSync(path.join(DATA, 'settings.json'), JSON.stringify(all));
     const before = w.sheet.snapshot();
-    const i = await run(w, 'fire', { user: target, type: 'Terminated', reason: 'test' });
+    const i = await run(w, 'fire', { user: target, department: 'community_outreach', type: 'Terminated', reason: 'test' });
     if (w.sheet.snapshot() !== before) return 'the roster changed';
     if (target.dms.length || w.hub.kicked.length) return 'told or removed somebody';
     return /No staff hub is set/.test(said(i)) || said(i);
@@ -837,8 +943,16 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     const w = world();
     const target = fakeUser(ID.STRANGER);
     join(w.hub, target, []);
-    const i = await run(w, 'fire', { user: target, type: 'Terminated', reason: 'test' });
+    const i = await run(w, 'fire', { user: target, department: 'development', type: 'Terminated', reason: 'test' });
     return (!w.hub.kicked.length && !target.dms.length && /not on the Official Staff Roster/.test(said(i))) || said(i);
+  });
+
+  await check('/fire from the wrong department removes nobody and names where they are', async () => {
+    const w = world();
+    const target = fireSetup(w);
+    const i = await run(w, 'fire', { user: target, department: 'development', type: 'Terminated', reason: 'test' });
+    if (w.hub.kicked.length || target.dms.length) return 'removed or told somebody';
+    return /They are in: Community Outreach/.test(said(i)) || said(i);
   });
 
   // =========================================================================
@@ -944,7 +1058,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   });
 
   // =========================================================================
-  section('/addnote, ratings, /infract, /promote');
+  section('/addnote, ratings, /infract');
   // =========================================================================
   await check('/addnote adds a dated, signed note and posts nothing anywhere', async () => {
     const w = world();
@@ -983,25 +1097,129 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return (!choices.includes('Fire') && !choices.includes('Staff Blacklist')) || choices.join(', ');
   });
 
-  await check('/promote writes the sheet rank, then gives the role', async () => {
-    const w = world();
-    const u = fakeUser(ID.B);
-    const m = join(w.main, u, []);
-    const lead = fakeUser('700000000000000030');
+  // =========================================================================
+  section('/promote, /demote');
+  // =========================================================================
+  const OLD = '500000000000000004';
+  const oldRank = (extra = {}) => ({ id: OLD, name: 'Staff', editable: true, ...extra });
+  const newRank = (extra = {}) => ({ id: RANK, name: 'Senior', editable: true, ...extra });
+  let leadCount = 0;
+  // Runs /promote or /demote as Staff Leadership, from the main server, on someone
+  // who currently has the old rank role.
+  async function rankRun(w, name, { id = ID.B, options = {}, hasOld = true, member: memberHook } = {}) {
+    const u = fakeUser(id, 'target');
+    const m = join(w.main, u, hasOld ? [OLD] : []);
+    if (memberHook) memberHook(m);
+    leadCount += 1;
+    const lead = fakeUser(`7000000000000001${String(leadCount).padStart(2, '0')}`, 'lead');
     join(w.hub, lead, [LEAD]);
-    const i = await run(w, 'promote', { user: u, sheet_rank: 'Senior Staff', rank: { id: RANK, name: 'Senior', editable: true }, reason: 'great work' }, { member: join(w.main, lead, []), user: lead });
-    if (w.sheet.rowsFor(OFFICIAL, ID.B)[0].roles !== 'Senior Staff') return `title not set. said: ${said(i)}`;
-    return m.roles.added.includes(RANK) || 'role not given';
+    const i = await run(w, name, { user: u, sheet_rank: 'Senior Staff', previous_rank: oldRank(), new_rank: newRank(), reason: 'because', ...options }, { member: join(w.main, lead, []), user: lead });
+    return { i, u, m };
+  }
+
+  await check('/promote and /demote have the same options, with previous_rank and new_rank required', () => {
+    const names = (c) => cmd(c).data.toJSON().options.map((o) => `${o.name}${o.required ? '*' : ''}`).join(',');
+    const want = 'user*,sheet_rank*,previous_rank*,new_rank*,reason*,department';
+    if (names('promote') !== want) return `promote: ${names('promote')}`;
+    return names('demote') === want || `demote: ${names('demote')}`;
   });
 
-  await check('/promote for someone not on the roster gives no role', async () => {
+  await check('/promote writes the sheet rank, gives new_rank, then takes previous_rank away', async () => {
     const w = world();
-    const u = fakeUser(ID.STRANGER);
-    const m = join(w.main, u, []);
-    const lead = fakeUser('700000000000000031');
-    join(w.hub, lead, [LEAD]);
-    await run(w, 'promote', { user: u, sheet_rank: 'x', rank: { id: RANK, name: 'x', editable: true }, reason: 'r' }, { member: join(w.main, lead, []), user: lead });
-    return !m.roles.added.length || 'gave a role to someone not on the roster';
+    const { i, m } = await rankRun(w, 'promote');
+    if (w.sheet.rowsFor(OFFICIAL, ID.B)[0].roles !== 'Senior Staff') return `title not set. said: ${said(i)}`;
+    if (!m.roles.added.includes(RANK)) return 'new_rank not given';
+    return (m.roles.removed.includes(OLD) && !m.roles.cache.has(OLD)) || 'previous_rank not taken away';
+  });
+
+  await check('/demote does the same swap, logs in the infraction log (not promotions) and DMs them', async () => {
+    const w = world();
+    const promoteLog = fakeChannel(w.client, '600000000000000077');
+    settings.updateSettings(HUB, { promoteChannel: promoteLog.id });
+    const { i, u, m } = await rankRun(w, 'demote', { options: { sheet_rank: 'Junior Staff', previous_rank: { id: RANK, name: 'Senior', editable: true }, new_rank: { id: OLD, name: 'Staff', editable: true } }, hasOld: false, member: (mm) => mm.roles.cache.add(RANK) });
+    if (w.sheet.rowsFor(OFFICIAL, ID.B)[0].roles !== 'Junior Staff') return `title not set. said: ${said(i)}`;
+    if (!m.roles.cache.has(OLD) || m.roles.cache.has(RANK)) return `roles now ${JSON.stringify([...m.roles.cache])}`;
+    if (promoteLog.sent.length) return 'a demotion was posted in the promotion log';
+    if (w.ch.infract.sent.length !== 1) return `infraction log got ${w.ch.infract.sent.length}`;
+    const text = payloadText(w.ch.infract.sent[0]);
+    if (!text.includes('Staff Demotion') || !text.includes('Previous Rank')) return text;
+    return u.dms.length === 1 || 'no DM';
+  });
+
+  await check('the rank embed names the roles instead of mentioning them (mentions break in DMs)', async () => {
+    const w = world();
+    const { u } = await rankRun(w, 'promote');
+    const text = payloadText(u.dms[0] || {});
+    if (text.includes('<@&')) return 'still uses a role mention';
+    return (text.includes('"name":"Previous Rank","value":"Staff"') && text.includes('"name":"New Rank","value":"Senior"')) || text;
+  });
+
+  await check('the same role for previous_rank and new_rank changes nothing', async () => {
+    const w = world();
+    const before = w.sheet.snapshot();
+    const { i, m } = await rankRun(w, 'promote', { options: { previous_rank: newRank() } });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    if (m.roles.added.length || m.roles.removed.length) return 'roles changed';
+    return /same role/.test(said(i)) || said(i);
+  });
+
+  await check('@everyone as a rank changes nothing', async () => {
+    const w = world();
+    const before = w.sheet.snapshot();
+    const { i, m } = await rankRun(w, 'demote', { options: { new_rank: { id: MAIN, name: '@everyone', editable: true } } });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    if (m.roles.added.length || m.roles.removed.length) return 'roles changed';
+    return /@everyone is not a rank role/.test(said(i)) || said(i);
+  });
+
+  await check('/hire refuses @everyone as the rank before touching the roster', async () => {
+    const w = world();
+    const newbie = fakeUser(ID.NEW, 'newbie');
+    join(w.main, newbie, []);
+    const before = w.sheet.snapshot();
+    const i = await run(w, 'hire', { user: newbie, department: 'development', sheet_rank: 'Developer', rank: { id: MAIN, name: '@everyone', editable: true } });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    return /@everyone is not a rank role/.test(said(i)) || said(i);
+  });
+
+  await check('a previous_rank the bot cannot take away stops it before the roster changes', async () => {
+    const w = world();
+    const before = w.sheet.snapshot();
+    const { i, m } = await rankRun(w, 'demote', { options: { previous_rank: oldRank({ editable: false }) } });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    if (m.roles.added.length) return 'gave a role anyway';
+    return /cannot take away \*\*Staff\*\*/.test(said(i)) || said(i);
+  });
+
+  await check('a new_rank the bot cannot give stops it before the roster changes', async () => {
+    const w = world();
+    const before = w.sheet.snapshot();
+    const { i } = await rankRun(w, 'promote', { options: { new_rank: newRank({ editable: false }) } });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    return /cannot give \*\*Senior\*\*/.test(said(i)) || said(i);
+  });
+
+  await check('if new_rank cannot be added, previous_rank is kept, so they are never left rankless', async () => {
+    const w = world();
+    const { i, m } = await rankRun(w, 'promote', { member: (mm) => { mm.roles.add = async () => { throw new Error('Missing Permissions'); }; } });
+    if (m.roles.removed.length || !m.roles.cache.has(OLD)) return 'took away the old rank anyway';
+    return /still have \*\*Staff\*\*/.test(said(i)) || said(i);
+  });
+
+  await check('someone who did not have previous_rank still gets new_rank, and HR is told', async () => {
+    const w = world();
+    const { i, m } = await rankRun(w, 'promote', { hasOld: false });
+    if (!m.roles.added.includes(RANK)) return 'new_rank not given';
+    return /did not have/.test(said(i)) || said(i);
+  });
+
+  await check('/promote and /demote for someone not on the roster change no roles', async () => {
+    for (const name of ['promote', 'demote']) {
+      const w = world();
+      const { m } = await rankRun(w, name, { id: ID.STRANGER });
+      if (m.roles.added.length || m.roles.removed.length) return `${name} changed roles for someone not on the roster`;
+    }
+    return true;
   });
 
   // =========================================================================

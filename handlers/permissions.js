@@ -3,7 +3,9 @@
 //   isOwner        - the two ids in .env. Runs !sc and /config, nothing else.
 //   canManageStaff - Administrators of the server the command is run in, or
 //                    anyone holding the Staff Leadership role IN THE STAFF HUB.
-//                    Runs /promote, /infract and /reportembed.
+//                    Runs /promote, /demote and /reportembed.
+//   canManageHR    - canManageStaff, or the HR role in the MAIN server. Runs the
+//                    HR commands that edit the roster.
 const { PermissionFlagsBits } = require('discord.js');
 const { ownerIds } = require('../config');
 const { getServers, getSettings } = require('./settings');

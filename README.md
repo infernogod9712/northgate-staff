@@ -50,8 +50,9 @@ It needs no token and no network, and never touches `data/`.
 | Command | Who can run it | What it does |
 | --- | --- | --- |
 | `/hire` | HR | Adds them to the roster under a department, gives the rank role, welcomes them with the staff handbook |
-| `/promote` | Staff Leadership | Sets their roster title (`sheet_rank`), gives the rank role, logs it, DMs them |
-| `/fire` | HR | Moves them to the Former Staff Roster as Retired or Terminated, and removes them from the staff hub |
+| `/promote` | Staff Leadership | Sets their roster title (`sheet_rank`), takes away `previous_rank`, gives `new_rank`, logs it in the promotion log, DMs them |
+| `/demote` | Staff Leadership | The same as `/promote`, logged in the infraction log instead |
+| `/fire` | HR | Moves them out of one department to the same department on the Former Staff Roster, as Retired or Terminated. Removes them from the staff hub when it was their last department |
 | `/suspend`, `/unsuspend` | HR | Sets their roster status to Suspended, or back to Active |
 | `/loalog` | HR | Starts a Leave of Absence or Reduced Activity with an end date, or ends one early. They return to Active by themselves |
 | `/infract` | HR | Logs an infraction, DMs them, and records it under Warnings or Infractions on the roster |
@@ -112,7 +113,20 @@ why (see `handlers/rosterWriter.js`):
 
 Someone listed in two departments has two rows. Statuses, notes, warnings and
 infractions apply to both. Ratings and the roster title apply to one, so those
-commands ask for the `department` when it is needed. `/fire` moves every row.
+commands ask for the `department` when it is needed.
+
+**Firing.** `/fire` always asks which department they are leaving, and moves only
+that row. It lands under the same department on the Former Staff Roster, never
+just in the first empty row. The Former roster has its own list of department
+headers (it has Bot Development and Legal, and no IT Support or Sales), so when
+the department is missing there the bot adds its header, in the same order as the
+Official roster and formatted like the other headers. They are only removed from
+the staff hub when that was their last department.
+
+**Rank changes.** `/promote` and `/demote` take the role to take away
+(`previous_rank`) and the role to give (`new_rank`). Both roles are checked before
+anything changes. The new role is given before the old one is taken away, so a
+failure halfway leaves them with both ranks, never with none.
 
 **Leave that ends by itself.** `/loalog` takes the last day away (`2026-10-01`) or a
 length (`7d`, `2w`). A check every minute puts them back to Active once it passes,
@@ -162,6 +176,8 @@ role View Channel and take it away from everyone else.
 | `handlers/hrcommand.js` | The HR permission check and plain-English roster errors |
 | `handlers/hrnotices.js` | The welcome message and staff action embeds |
 | `handlers/commandlog.js` | The "Command Used" log |
+| `handlers/rankcommand.js` | `/promote` and `/demote`, built from one definition |
+| `handlers/ratingcommand.js` | `/setperformancerating` and `/setactivityrating`, built from one definition |
 | `tools/check-hr.js` | Tests every roster write against a simulated sheet |
 | `commands/` | One file per slash command |
 
@@ -169,7 +185,7 @@ role View Channel and take it away from everyone else.
 
 - `.env` and `data/` are gitignored. Nothing with a token or a live setting goes
   to GitHub.
-- The bot's role must sit ABOVE any rank role it hands out, or `/promote` fails
-  with a missing permissions error.
+- The bot's role must sit ABOVE any rank role it gives or takes away, or `/hire`,
+  `/promote` and `/demote` refuse to run.
 - Filenames are lowercase. The Pi runs Linux and is case-sensitive about them,
   even though Windows is not.

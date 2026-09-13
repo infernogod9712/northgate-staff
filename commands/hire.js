@@ -56,7 +56,12 @@ module.exports = {
     const member = await interaction.guild.members.fetch(target.id).catch(() => null);
     if (!member) return interaction.editReply({ content: 'That user is not in this server, so I cannot give them the rank role. Nothing was changed.' });
 
-    // See /promote: compared to false on purpose.
+    // The @everyone role shares the server's id and can never be given.
+    if (rank.id === interaction.guild.id) {
+      return interaction.editReply({ content: '@everyone is not a rank role. Pick the actual rank role. Nothing was changed.' });
+    }
+
+    // See handlers/rankcommand.js: compared to false on purpose.
     if (rank.editable === false) {
       return interaction.editReply({ content: `I cannot give **${rank.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.` });
     }

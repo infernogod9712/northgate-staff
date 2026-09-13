@@ -37,6 +37,7 @@ const HUB = '300000000000000001';
 const OTHER = '400000000000000001';
 const LEAD = '500000000000000001';
 const RANK = '500000000000000002';
+const OLD_RANK = '500000000000000003';
 const CH_PROMOTE = '600000000000000001';
 const CH_INFRACT = '600000000000000002';
 const CH_FORUM = '600000000000000003';
@@ -109,6 +110,7 @@ function join(guild, user, roleIds = [], admin = false) {
     roles: { cache: new Set(roleIds) },
   };
   m.roles.add = async (roleId) => { m.roles.cache.add(roleId); guild.actions.push(['role', user.id, roleId]); };
+  m.roles.remove = async (roleId) => { m.roles.cache.delete(roleId); guild.actions.push(['unrole', user.id, roleId]); };
   m.kick = async () => { guild.actions.push(['kick', user.id]); guild.members.store.delete(user.id); };
   guild.members.store.set(user.id, m);
   return m;
@@ -156,7 +158,7 @@ function world() {
   require(path.join(ROOT, 'handlers', 'rosterWriter')).setWriter({
     isConfigured: () => true,
     hire: async () => ({ row: 1, department: 'Test' }),
-    fire: async () => ({ moved: 1, departments: ['Test'] }),
+    fire: async () => ({ moved: 1, department: 'Test', remaining: [], addedSection: false }),
     setRating: async () => ({ department: 'Test' }),
     setRole: async () => ({ previous: 'Old Title', department: 'Test' }),
     setStatus: async () => ({ previous: ['Active'], rows: 1 }),
@@ -387,7 +389,7 @@ function world() {
     const targetInMain = join(w.main, target);
     const i = fakeInteraction({
       client: w.client, guild: w.main, member: join(w.main, boss), user: boss,
-      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', previous_rank: { id: OLD_RANK, name: 'Old Rank' }, new_rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     if (!targetInMain.roles.cache.has(RANK)) return `rank not given. said: ${said(i)}`;
@@ -404,7 +406,7 @@ function world() {
     join(w.hub, target);
     const i = fakeInteraction({
       client: w.client, guild: w.hub, member: w.hub.members.store.get(boss.id), user: boss,
-      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', previous_rank: { id: OLD_RANK, name: 'Old Rank' }, new_rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     if (/staffserver/.test(said(i))) return 'still points at /staffserver, which does not exist';
@@ -427,7 +429,7 @@ function world() {
     join(w.main, target);
     const i = fakeInteraction({
       client: w.client, guild: w.main, member: join(w.main, boss, [LEAD]), user: boss,
-      options: { user: target, sheet_rank: 'Test Title', rank: { id: RANK, name: 'Rank' }, reason: 'test' },
+      options: { user: target, sheet_rank: 'Test Title', previous_rank: { id: OLD_RANK, name: 'Old Rank' }, new_rank: { id: RANK, name: 'Rank' }, reason: 'test' },
     });
     await commands.promote.execute(i);
     return log.sent.length === 1 || `log received ${log.sent.length}. said: ${said(i)}`;

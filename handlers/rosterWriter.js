@@ -196,6 +196,49 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
     return cells;
   }
 
+  const findSection = (rows, section) => rows.find((r) => r.kind === 'section' && squash(r.department) === squash(section));
+
+  // Where `count` new rows go at the bottom of a department. Empty placeholder
+  // rows at the end of that department are used first, so the sheet does not keep
+  // growing blank rows, and new rows are inserted for the rest. Returns the row
+  // numbers as they will be once `requests` (the inserts) have run.
+  function spotsUnder(t, rows, header, count) {
+    let lastPerson = null;
+    let trailing = [];
+    for (let i = rows.indexOf(header) + 1; i < rows.length && rows[i].kind !== 'section'; i += 1) {
+      if (rows[i].kind === 'person') {
+        lastPerson = rows[i];
+        trailing = [];
+      } else {
+        trailing.push(rows[i].row);
+      }
+    }
+
+    let spots = trailing.slice(0, count);
+    const missing = count - spots.length;
+    const requests = [];
+    if (missing > 0) {
+      const after = spots.length ? spots[spots.length - 1] : (lastPerson || header).row;
+      let at;
+      if (after < t.lastRow) {
+        at = after + 1;
+      } else if (after !== header.row) {
+        // The department runs to the very last row of the table. A row inserted
+        // below the table would fall outside it and lose its dropdown and star
+        // chips, so new rows go in just above that last row instead: still inside
+        // the table, still inside the right department.
+        at = after;
+      } else {
+        throw new RosterError('no_section', `the "${header.department}" section has no room under it in the table`);
+      }
+      for (let k = 0; k < missing; k += 1) requests.push(insertRow(t, at));
+      spots = spots.map((r) => (r >= at ? r + missing : r));
+      for (let k = 0; k < missing; k += 1) spots.push(at + k);
+      spots.sort((a, b) => a - b);
+    }
+    return { spots, requests };
+  }
+
   // -------------------------------------------------------------------------
   // Operations
   // -------------------------------------------------------------------------
@@ -208,42 +251,13 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
       const { official: t } = await tables();
       const rows = await readRows(t);
 
-      const header = rows.find((r) => r.kind === 'section' && squash(r.department) === squash(section));
+      const header = findSection(rows, section);
       if (!header) throw new RosterError('no_section', `there is no "${section}" section on the roster`);
       if (rows.some((r) => r.kind === 'person' && r.discordId === discordId && squash(r.department) === squash(section))) {
         throw new RosterError('already_listed', `they are already on the roster under ${header.department}`);
       }
 
-      let lastPerson = null;
-      let trailingBlank = null;
-      for (let i = rows.indexOf(header) + 1; i < rows.length && rows[i].kind !== 'section'; i += 1) {
-        if (rows[i].kind === 'person') {
-          lastPerson = rows[i];
-          trailingBlank = null;
-        } else if (!trailingBlank) {
-          trailingBlank = rows[i];
-        }
-      }
-
-      const requests = [];
-      let target;
-      if (trailingBlank) {
-        target = trailingBlank.row;
-      } else {
-        const after = (lastPerson || header).row;
-        if (after < t.lastRow) {
-          target = after + 1;
-        } else if (lastPerson) {
-          // The department runs to the very last row of the table. A row inserted
-          // below the table would fall outside it and lose its dropdown and star
-          // chips, so it goes in just above that last person instead: still inside
-          // the table, still inside the right department.
-          target = lastPerson.row;
-        } else {
-          throw new RosterError('no_section', `the "${header.department}" section has no room under it in the table`);
-        }
-        requests.push(insertRow(t, target));
-      }
+      const { spots: [target], requests } = spotsUnder(t, rows, header, 1);
 
       requests.push(cellsAt(t, target, 0, wholeRow(t, {
         nickname: text(nickname),
@@ -264,26 +278,59 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
     });
   }
 
-  // Moves every row someone has from the Official roster to the Former one, with
-  // Retired or Terminated as their status and the reason added to their Notes.
-  function fire({ discordId, type, reason, by, date }) {
+  // Moves someone's row in ONE department from the Official roster to the same
+  // department on the Former roster, with Retired or Terminated as their status
+  // and the reason added to their Notes. Rows they have in other departments stay
+  // where they are, and are returned as `remaining`.
+  //
+  // The Former roster has its own department headers, and they are not the same
+  // list as the Official one. When the department has no header there yet, one is
+  // added (text copied from the Official header, formatting from the Former
+  // header it goes above), just above the next department in the Official order,
+  // so both rosters stay in the same order.
+  function fire({ discordId, section, type, reason, by, date }) {
+    if (!section) throw new Error('fire needs the department they are leaving');
     return serial(async () => {
       const { official: off, former } = await tables();
-      const mine = personRows(await readRows(off), discordId);
+      const offRows = await readRows(off);
+      const mine = personRows(offRows, discordId, section);
       const formerRows = await readRows(former);
       const status = exactOption(former, 'status', type);
 
       const requests = [];
-      let blanks = formerRows.filter((r) => r.kind === 'blank').map((r) => r.row);
-      const needed = mine.length - blanks.length;
-      if (needed > 0) {
-        // Not enough empty rows in the Former table. New ones go in just above its
-        // last row, which keeps them inside the table. Everything from that row
-        // down moves by `needed`, including any blank that was already there.
-        for (let k = 0; k < needed; k += 1) requests.push(insertRow(former, former.lastRow));
-        blanks = blanks.map((r) => (r >= former.lastRow ? r + needed : r));
-        for (let k = 0; k < needed; k += 1) blanks.push(former.lastRow + k);
-        blanks.sort((a, b) => a - b);
+      let spots;
+      let department;
+      const existing = findSection(formerRows, section);
+      if (existing) {
+        const placed = spotsUnder(former, formerRows, existing, mine.length);
+        requests.push(...placed.requests);
+        spots = placed.spots;
+        department = existing.department;
+      } else {
+        const offSections = offRows.filter((r) => r.kind === 'section');
+        const offHeader = findSection(offSections, section);
+        const next = offSections
+          .slice(offSections.indexOf(offHeader) + 1)
+          .map((s) => findSection(formerRows, s.department))
+          .find(Boolean);
+        if (!next) {
+          throw new RosterError('no_section', `the Former Staff Roster has no "${offHeader.department}" section, and no department after it to add one above`);
+        }
+
+        const at = next.row;
+        const added = 1 + mine.length;
+        for (let k = 0; k < added; k += 1) requests.push(insertRow(former, at));
+        const band = (row) => ({ sheetId: former.sheetId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: 0, endColumnIndex: former.width });
+        requests.push({ copyPaste: { source: band(at + added), destination: band(at), pasteType: 'PASTE_FORMAT' } });
+
+        const headerCells = {};
+        for (const field of Object.keys(FIELDS)) {
+          const value = offHeader.cells[off.cols[field]]?.userEnteredValue;
+          headerCells[field] = field !== 'status' && value ? { userEnteredValue: value } : {};
+        }
+        requests.push(cellsAt(former, at, 0, wholeRow(former, headerCells)));
+        spots = mine.map((_, i) => at + 1 + i);
+        department = offHeader.department;
       }
 
       mine.forEach((person, i) => {
@@ -296,23 +343,30 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
         const line = `${date}: ${type} by ${by}. ${reason}`;
         copied.status = text(status);
         copied.notes = text(oldNotes && !EMPTY_WORDS.has(oldNotes.toLowerCase()) ? `${oldNotes}\n${line}` : line);
-        requests.push(cellsAt(former, blanks[i], 0, wholeRow(former, copied)));
+        requests.push(cellsAt(former, spots[i], 0, wholeRow(former, copied)));
       });
 
       // Bottom-up, so deleting one row never moves the next one to be deleted.
       [...mine].sort((a, b) => b.row - a.row).forEach((person) => requests.push(deleteRow(off, person.row)));
+
+      const inSection = (rows) => rows.filter((r) => r.kind === 'person' && r.discordId === discordId && squash(r.department) === squash(section)).length;
+      const formerBefore = inSection(formerRows);
+      const remaining = [...new Set(offRows
+        .filter((r) => r.kind === 'person' && r.discordId === discordId && !mine.includes(r))
+        .map((r) => r.department))];
 
       await api.batchUpdate(requests);
 
       // The batch is all-or-nothing, so this only fails if someone edited the sheet
       // by hand in the same moment. Worth saying out loud if it does.
       const after = await tables();
-      const stillThere = (await readRows(after.official)).some((r) => r.kind === 'person' && r.discordId === discordId);
-      const movedCount = (await readRows(after.former)).filter((r) => r.kind === 'person' && r.discordId === discordId).length;
-      if (stillThere || movedCount < mine.length) {
-        throw new RosterError('verify', 'the roster changed while they were being moved, so check both roster tabs', { moved: mine.length });
+      const stillThere = inSection(await readRows(after.official));
+      const formerNow = inSection(await readRows(after.former));
+      const result = { moved: mine.length, department, remaining, addedSection: !existing };
+      if (stillThere || formerNow < formerBefore + mine.length) {
+        throw new RosterError('verify', 'the roster changed while they were being moved, so check both roster tabs', result);
       }
-      return { moved: mine.length, departments: mine.map((p) => p.department) };
+      return result;
     });
   }
 

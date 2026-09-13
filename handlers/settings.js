@@ -149,8 +149,8 @@ function serverRoles(guildId) {
 // offer the server option until !sc has re-registered the commands, which
 // Discord can take up to an hour to show.
 //
-// Removing somebody is the one thing that does NOT fall back. /infract refuses
-// to kick until a hub is marked, because the old behaviour there was the bug.
+// Removing somebody is the one thing that does NOT fall back. /fire refuses to
+// run until a hub is marked, because kicking from the wrong server was the bug.
 let warnedUnmarked = false;
 function warnIfUnmarked(servers) {
   if (warnedUnmarked || (servers.hub && servers.main)) return;

@@ -64,6 +64,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
 
+    // Every command works on a server's roles, channels and settings. Discord also
+    // offers global commands in a DM with the bot, where there is no server at all,
+    // and every command would crash on it.
+    if (!interaction.inGuild()) {
+      return void (await interaction.reply({ content: 'Use my commands inside the server, not in DMs.', flags: MessageFlags.Ephemeral }));
+    }
+
     // Logged before it runs, and whether or not the person is allowed to use it.
     // Not awaited: a slow or missing log channel must never delay the command.
     logCommand({

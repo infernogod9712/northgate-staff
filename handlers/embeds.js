@@ -1,4 +1,4 @@
-const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, escapeMarkdown } = require('discord.js');
 
 // One shared palette so every embed the bot sends reads as one system.
 const COLORS = {
@@ -12,19 +12,26 @@ function withFooter(embed, text, iconURL) {
 }
 
 // ── Staff actions ─────────────────────────────────────────────────────────────
-function promotionEmbed(target, rank, reason, issuer, title) {
+// /promote and /demote. Ranks are shown by NAME, not as role mentions: a role
+// mention only renders inside the server that owns the role, and this embed goes
+// to a DM and to the staff hub, where it would show as "@deleted-role".
+function rankChangeEmbed({ kind, target, previous, next, reason, issuer, title }) {
+  const promotion = kind === 'promote';
   return withFooter(new EmbedBuilder()
-    .setColor(COLORS.promote)
-    .setTitle('Staff Promotion')
-    .setDescription('The staff leadership team has decided to grant you a promotion. Congratulations!')
+    .setColor(promotion ? COLORS.promote : COLORS.infract)
+    .setTitle(promotion ? 'Staff Promotion' : 'Staff Demotion')
+    .setDescription(promotion
+      ? 'The staff leadership team has decided to grant you a promotion. Congratulations!'
+      : 'The staff leadership team has decided to demote you. Please review the details below.')
     .setThumbnail(target.displayAvatarURL())
     .addFields(
       { name: 'Staff Member', value: `<@${target.id}>`, inline: true },
-      { name: 'New Rank', value: `<@&${rank.id}>`, inline: true },
+      { name: 'Previous Rank', value: escapeMarkdown(previous.name).slice(0, 1024), inline: true },
+      { name: 'New Rank', value: escapeMarkdown(next.name).slice(0, 1024), inline: true },
       ...(title ? [{ name: 'Title', value: title, inline: true }] : []),
       { name: 'Reason', value: reason, inline: false },
     ),
-    `Promotion issued by ${issuer.username}`, issuer.displayAvatarURL());
+    `${promotion ? 'Promotion' : 'Demotion'} issued by ${issuer.username}`, issuer.displayAvatarURL());
 }
 
 // One template for every infraction type. Only Type + Reason change, plus an
@@ -84,6 +91,6 @@ function reportLogEmbed(f, reporter) {
 
 module.exports = {
   COLORS, withFooter,
-  promotionEmbed, infractionEmbed,
+  rankChangeEmbed, infractionEmbed,
   reportBoxEmbed, reportBoxRow, reportLogEmbed,
 };

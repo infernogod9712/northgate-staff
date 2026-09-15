@@ -8,6 +8,7 @@ const { startAutoSync } = require('./git-sync');
 const { startHrPanel } = require('./handlers/hrpanel');
 const { startLeaveChecks } = require('./handlers/leave');
 const { logCommand } = require('./handlers/commandlog');
+const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
 
 const client = new Client({
   intents: [
@@ -95,7 +96,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // !sc (owners only) registers the slash commands globally, so they appear in every
 // server the bot is in. Global commands can take up to about an hour to propagate.
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || !message.guild) return;
+  if (!message.guild) return;
+
+  // Other NorthGate bots talk to this one with bc! messages, such as the ticket
+  // bot's bc!hire (handlers/botcomms.js). Anything else a bot says is ignored.
+  if (message.author.bot) {
+    let handled = null;
+    try {
+      handled = await handleBotMessage(message);
+    } catch (err) {
+      console.error('[bc] could not handle a bot message:', err.message);
+    }
+    if (handled) {
+      logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled.command, type: 'Bot command' });
+    }
+    return;
+  }
+
   if (message.content.trim() !== '!sc') return;
 
   logCommand({
@@ -130,6 +147,18 @@ client.on(Events.MessageCreate, async (message) => {
     await message.reply(`Sync failed: ${err.message}`).catch(() => {});
   }
 });
+
+// A ticket that is closed and deleted without a /hire takes its bc!hire details
+// with it, so nothing about a person is kept for a ticket that no longer exists.
+const forgetTicket = (channel) => {
+  try {
+    clearPendingHire(channel.id);
+  } catch (err) {
+    console.error('[bc] could not clear a deleted ticket:', err.message);
+  }
+};
+client.on(Events.ChannelDelete, forgetTicket);
+client.on(Events.ThreadDelete, forgetTicket);
 
 client.on('error', (err) => console.error('[NGS] client error:', err));
 process.on('unhandledRejection', (err) => console.error('[NGS] unhandled rejection:', err));

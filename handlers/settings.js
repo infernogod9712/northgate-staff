@@ -34,7 +34,7 @@ const HUB_KEYS = ['staffLeadershipRole', 'promoteChannel', 'infractChannel', 'st
 const MAIN_KEYS = ['staffReportChannel', 'hrRole', 'logChannel'];
 // Settings every server may have its own copy of. Each server gets its own HR
 // panel, so the panel channel is set once in the hub and once in the main server.
-const BOTH_KEYS = ['hrPanelChannel'];
+const BOTH_KEYS = ['hrPanelChannel', 'ticketBot'];
 
 const SNOWFLAKE = /^\d{17,20}$/;
 

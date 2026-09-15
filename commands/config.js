@@ -35,6 +35,7 @@ const OPTIONS = [
   ['hr_role',          'hrRole',              'role',    'HR Role'],
   ['log_channel',      'logChannel',          'channel', 'Command Log'],
   ['hr_panel_channel', 'hrPanelChannel',      'channel', 'HR Panel Channel'],
+  ['ticket_bot',       'ticketBot',           'user',    'Ticket Bot (bc!hire)'],
 ];
 
 // Which server a setting belongs to: 'hub', 'main' or 'either'.
@@ -45,6 +46,7 @@ const owner = (key) => {
   return null;
 };
 const fits = (key, roles) => (owner(key) === 'either' ? roles.length > 0 : roles.includes(owner(key)));
+const mention = (id, kind) => (kind === 'role' ? `<@&${id}>` : kind === 'user' ? `<@${id}>` : `<#${id}>`);
 
 // Channels whose contents members must not be able to read. The HR panel names
 // people with low performance ratings, so a channel @everyone can see is refused.
@@ -95,7 +97,10 @@ module.exports = {
     .addChannelOption((o) => o
       .setName('hr_panel_channel')
       .setDescription('Either server: staff-only channel for the auto-updating HR panel')
-      .addChannelTypes(ChannelType.GuildText)),
+      .addChannelTypes(ChannelType.GuildText))
+    .addUserOption((o) => o
+      .setName('ticket_bot')
+      .setDescription('Either server: the ticket bot whose bc!hire messages fill in /hire in a ticket')),
 
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -126,7 +131,9 @@ module.exports = {
     for (const [optionName, key, kind] of OPTIONS) {
       const value = kind === 'role'
         ? interaction.options.getRole(optionName)
-        : interaction.options.getChannel(optionName);
+        : kind === 'user'
+          ? interaction.options.getUser(optionName)
+          : interaction.options.getChannel(optionName);
       if (!value) continue;
 
       if (!fits(key, roles)) {
@@ -145,12 +152,19 @@ module.exports = {
         continue;
       }
 
+      // bc!hire puts details on someone's hire, so only a bot account may send it.
+      if (kind === 'user' && !value.bot) {
+        problem = true;
+        lines.push(`Skipped **${optionName}**: <@${value.id}> is not a bot. Pick the ticket bot itself.`);
+        continue;
+      }
+
       patch[key] = value.id;
       // A new panel channel means a new panel message. The old message, if there
       // was one, simply stops updating and can be deleted by hand.
       if (key === 'hrPanelChannel' && current.hrPanelChannel !== value.id) patch.hrPanelMessage = null;
 
-      lines.push(kind === 'role' ? `**${optionName}** set to <@&${value.id}>` : `**${optionName}** set to <#${value.id}>`);
+      lines.push(`**${optionName}** set to ${mention(value.id, kind)}`);
     }
 
     if (Object.keys(patch).length) updateSettings(guildId, patch);
@@ -158,7 +172,7 @@ module.exports = {
     // Always show the whole picture, so one command both sets and checks.
     const s = getSettings(guildId);
     const servers = getServers();
-    const show = (id, kind) => (!id ? 'not set' : kind === 'role' ? `<@&${id}>` : `<#${id}>`);
+    const show = (id, kind) => (!id ? 'not set' : mention(id, kind));
     const describe = (id) => (!id ? 'not set' : id === guildId ? 'this server' : 'set, in another server');
 
     const embed = new EmbedBuilder()

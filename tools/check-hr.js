@@ -263,7 +263,7 @@ function makeSheet() {
       const status = value(cells[6]);
       if (!nick && !id) continue;
       if (!status.trim()) { department = nick; continue; }
-      out.push({ row: r + 1, nick, id, status, department, roles: value(cells[3]), perf: cells[4]?.userEnteredValue, act: cells[5]?.userEnteredValue, idCell: cells[1]?.userEnteredValue, warnings: value(cells[8]), infractions: value(cells[9]), notes: value(cells[10]) });
+      out.push({ row: r + 1, nick, id, status, department, roblox: value(cells[2]), roles: value(cells[3]), perf: cells[4]?.userEnteredValue, act: cells[5]?.userEnteredValue, idCell: cells[1]?.userEnteredValue, warnings: value(cells[8]), infractions: value(cells[9]), notes: value(cells[10]) });
     }
     return out;
   }
@@ -398,7 +398,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   const cmd = (name) => require(path.join(ROOT, 'commands', `${name}.js`));
 
   const resetData = () => {
-    for (const f of ['settings.json', 'leave.json']) {
+    for (const f of ['settings.json', 'leave.json', 'pendinghires.json']) {
       try { fs.unlinkSync(path.join(DATA, f)); } catch {}
     }
   };
@@ -873,6 +873,163 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     w.sheet.failNextWrite(500);
     await run(w, 'hire', { user: newbie, department: 'development', sheet_rank: 'Developer', rank });
     return (!w.ch.here.sent.length && !newbie.dms.length && !newbieMember.roles.added.length) || 'welcomed or ranked someone who is not on the roster';
+  });
+
+  // =========================================================================
+  section('Hiring from a ticket: bc!hire');
+  // =========================================================================
+  const { handleBotMessage, parseHire, pendingHire, MAX_AGE } = require(path.join(ROOT, 'handlers', 'botcomms'));
+  const TICKET_BOT = '900000000000000001';
+  const TICKET = '600000000000000050';
+
+  function botMessage(w, { authorId = TICKET_BOT, bot = true, content, channelId = TICKET, guild = w.main }) {
+    const m = { content, author: { id: authorId, bot }, guild, channel: { id: channelId }, replies: [], reactions: [] };
+    m.reply = async (p) => { m.replies.push(p); };
+    m.react = async (e) => { m.reactions.push(e); };
+    return m;
+  }
+  // HR runs /hire inside the ticket channel.
+  async function runInTicket(w, options) {
+    const ticket = fakeChannel(w.client, TICKET);
+    const i = fakeInteraction({ client: w.client, guild: w.main, member: w.hrMember, user: w.hrUser, options, channel: ticket });
+    await cmd('hire').execute(i);
+    return { i, ticket };
+  }
+  function ticketWorld() {
+    const w = world();
+    settings.updateSettings(MAIN, { ticketBot: TICKET_BOT });
+    return w;
+  }
+
+  await check('bc!hire is read as Discord ID, nickname (spaces allowed), Roblox ID', () => {
+    const got = [
+      parseHire(`${ID.NEW} Newbie 12345`),
+      parseHire(`<@${ID.NEW}>   Big  Newbie Jr 9`),
+    ];
+    const want = [
+      { discordId: ID.NEW, nickname: 'Newbie', robloxId: '12345' },
+      { discordId: ID.NEW, nickname: 'Big Newbie Jr', robloxId: '9' },
+    ];
+    return JSON.stringify(got) === JSON.stringify(want) || JSON.stringify(got);
+  });
+
+  await check('a bc!hire with a missing or wrong part is rejected', () => {
+    const bad = [`${ID.NEW} 12345`, `notanid Newbie 12345`, `${ID.NEW} Newbie notroblox`, '', `${ID.NEW} ${'x'.repeat(51)} 1`];
+    const accepted = bad.filter((text) => !parseHire(text).error);
+    return !accepted.length || `accepted ${JSON.stringify(accepted)}`;
+  });
+
+  await check('bc!hire from the ticket bot is remembered for that ticket channel', async () => {
+    const w = ticketWorld();
+    const m = botMessage(w, { content: `bc!hire ${ID.NEW} Newbie 12345` });
+    const handled = await handleBotMessage(m);
+    if (handled?.command !== 'hire') return `returned ${JSON.stringify(handled)}`;
+    const entry = pendingHire(TICKET);
+    if (entry?.discordId !== ID.NEW || entry.nickname !== 'Newbie' || entry.robloxId !== '12345') return JSON.stringify(entry);
+    return m.reactions.includes('✅') || 'no ✅ reaction';
+  });
+
+  await check('bc!hire from a person, or from any other bot, is ignored', async () => {
+    const w = ticketWorld();
+    const human = botMessage(w, { authorId: '700000000000000099', bot: false, content: `bc!hire ${ID.NEW} Faker 1` });
+    const otherBot = botMessage(w, { authorId: '900000000000000002', content: `bc!hire ${ID.NEW} Faker 1` });
+    const results = [await handleBotMessage(human), await handleBotMessage(otherBot)];
+    if (results.some(Boolean)) return 'handled a message from someone untrusted';
+    if (human.replies.length || otherBot.replies.length) return 'answered someone untrusted';
+    return pendingHire(TICKET) === null || 'stored details from someone untrusted';
+  });
+
+  await check('with no ticket_bot set, bc!hire is ignored', async () => {
+    const w = world();
+    const m = botMessage(w, { content: `bc!hire ${ID.NEW} Newbie 1` });
+    return (!(await handleBotMessage(m)) && pendingHire(TICKET) === null) || 'handled it anyway';
+  });
+
+  await check('a broken bc!hire from the ticket bot says why and saves nothing', async () => {
+    const w = ticketWorld();
+    const m = botMessage(w, { content: 'bc!hire Newbie 12345' });
+    await handleBotMessage(m);
+    if (pendingHire(TICKET) !== null) return 'saved it';
+    const reply = m.replies[0];
+    if (!reply || !/Could not read that bc!hire/.test(reply.content)) return JSON.stringify(reply);
+    return (reply.allowedMentions?.parse?.length === 0) || 'the reply can ping people';
+  });
+
+  await check('/hire in the ticket with no user fills in the ticket details, then forgets them', async () => {
+    const w = ticketWorld();
+    const { newbieMember, rank } = hireSetup(w);
+    await handleBotMessage(botMessage(w, { content: `bc!hire ${ID.NEW} Ticket Name 424242` }));
+    const { i } = await runInTicket(w, { department: 'development', sheet_rank: 'Developer', rank });
+    const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW);
+    if (!row) return `not on the roster. said: ${said(i)}`;
+    if (row.nick !== 'Ticket Name' || row.roblox !== '424242') return `roster has ${JSON.stringify([row.nick, row.roblox])}`;
+    if (!newbieMember.roles.added.includes(RANK)) return 'rank not given';
+    if (pendingHire(TICKET) !== null) return 'the ticket details were kept after use';
+    return /Used the ticket bot's details/.test(said(i)) || said(i);
+  });
+
+  await check('typed options still win over the ticket details', async () => {
+    const w = ticketWorld();
+    const { newbie, rank } = hireSetup(w);
+    await handleBotMessage(botMessage(w, { content: `bc!hire ${ID.NEW} Ticket Name 424242` }));
+    await runInTicket(w, { user: newbie, department: 'development', sheet_rank: 'Developer', rank, nickname: 'Typed Name' });
+    const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW);
+    return (row?.nick === 'Typed Name' && row.roblox === '424242') || JSON.stringify([row?.nick, row?.roblox]);
+  });
+
+  await check('ticket details for someone else are never put on a different hire', async () => {
+    const w = ticketWorld();
+    const { rank } = hireSetup(w);
+    const other = fakeUser(ID.NEW2, 'other');
+    join(w.main, other, []);
+    await handleBotMessage(botMessage(w, { content: `bc!hire ${ID.NEW} Ticket Name 424242` }));
+    const { i } = await runInTicket(w, { user: other, department: 'development', sheet_rank: 'Developer', rank });
+    const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW2);
+    if (!row) return `not hired. said: ${said(i)}`;
+    if (row.nick === 'Ticket Name' || row.roblox === '424242') return 'used the other person\'s ticket details';
+    if (pendingHire(TICKET) === null) return 'threw away the ticket details that were not used';
+    return /not them, so they were not used/.test(said(i)) || said(i);
+  });
+
+  await check('/hire with no user and no ticket details changes nothing', async () => {
+    const w = ticketWorld();
+    const { rank } = hireSetup(w);
+    const before = w.sheet.snapshot();
+    const { i } = await runInTicket(w, { department: 'development', sheet_rank: 'Developer', rank });
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    return /Pick the `user`/.test(said(i)) || said(i);
+  });
+
+  await check('if the roster write fails, the ticket details are kept for another try', async () => {
+    const w = ticketWorld();
+    const { rank } = hireSetup(w);
+    await handleBotMessage(botMessage(w, { content: `bc!hire ${ID.NEW} Ticket Name 424242` }));
+    w.sheet.failNextWrite(500);
+    await runInTicket(w, { department: 'development', sheet_rank: 'Developer', rank });
+    return pendingHire(TICKET)?.discordId === ID.NEW || 'lost the ticket details';
+  });
+
+  await check('ticket details older than 30 days are dropped', async () => {
+    const w = ticketWorld();
+    await handleBotMessage(botMessage(w, { content: `bc!hire ${ID.NEW} Old 1` }), 1_000);
+    if (!pendingHire(TICKET, 1_000 + MAX_AGE)) return 'dropped too early';
+    return pendingHire(TICKET, 1_000 + MAX_AGE + 1) === null || 'kept past 30 days';
+  });
+
+  await check('/config ticket_bot accepts a bot and refuses a person', async () => {
+    const w = world();
+    await configAs(w, w.main, { ticket_bot: { id: TICKET_BOT, bot: true } });
+    if (settings.getSettings(MAIN).ticketBot !== TICKET_BOT) return 'did not save the bot';
+    const i = await configAs(w, w.main, { ticket_bot: { id: '700000000000000098', bot: false } });
+    if (settings.getSettings(MAIN).ticketBot !== TICKET_BOT) return 'replaced it with a person';
+    return /is not a bot/.test(said(i)) || said(i);
+  });
+
+  await check('bc!hire shows in the command log as a bot command, without the details', async () => {
+    const w = ticketWorld();
+    await logCommand({ client: w.client, guild: w.main, channel: { id: TICKET }, user: { id: TICKET_BOT, username: 'ticketbot' }, name: 'hire', type: 'Bot command' });
+    const text = payloadText(w.ch.log.sent[0] || {});
+    return (text.includes('`bc!hire`') && text.includes('Bot command')) || text;
   });
 
   // =========================================================================

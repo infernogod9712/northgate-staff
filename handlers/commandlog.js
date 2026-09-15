@@ -35,7 +35,7 @@ async function logCommand({ client, guild, channel, user, name, type = 'Slash co
       return false;
     }
 
-    const shown = type === 'Prefix command' ? `!${name}` : `/${name}`;
+    const shown = type === 'Prefix command' ? `!${name}` : type === 'Bot command' ? `bc!${name}` : `/${name}`;
     const embed = new EmbedBuilder()
       .setColor(COLORS.info)
       .setTitle('Command Used')

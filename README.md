@@ -30,6 +30,7 @@ everything still logs in the hub.
 7. **In the main server:** `/config server:main`, plus `report_channel`, `hr_role`
    and `log_channel`, then `/reportembed` to post the panel.
 8. **In both:** `/config hr_panel_channel:#channel` for the auto-updating HR panel.
+9. **In the server with the hiring tickets:** `/config ticket_bot:@TicketBot`.
 
 A server only accepts its own settings. Trying to set a hub setting in the main
 server is refused and says why, rather than being saved where nothing reads it.
@@ -49,7 +50,7 @@ It needs no token and no network, and never touches `data/`.
 
 | Command | Who can run it | What it does |
 | --- | --- | --- |
-| `/hire` | HR | Adds them to the roster under a department, gives the rank role, welcomes them with the staff handbook |
+| `/hire` | HR | Adds them to the roster under a department, gives the rank role, welcomes them with the staff handbook. In a hiring ticket, the person, nickname and Roblox ID come from the ticket bot's `bc!hire` |
 | `/promote` | Staff Leadership | Sets their roster title (`sheet_rank`), takes away `previous_rank`, gives `new_rank`, logs it in the promotion log, DMs them |
 | `/demote` | Staff Leadership | The same as `/promote`, logged in the infraction log instead |
 | `/fire` | HR | Moves them out of one department to the same department on the Former Staff Roster, as Retired or Terminated. Removes them from the staff hub when it was their last department |
@@ -136,6 +137,22 @@ alone and the leave log says so. The leave log is a forum: each leave gets its o
 post, and a new end date, ending it early, or the bot ending it are all added inside
 that same post.
 
+**Hiring from a ticket.** When a hiring ticket opens, the ticket bot sends
+`bc!hire <Discord ID> <nickname> <Roblox ID>` in the ticket channel ("bc" is bot
+communication). The nickname can have spaces. This bot reacts with ✅ and remembers
+the details for that channel. When the ticket is done, HR runs `/hire` in the same
+channel with only `department`, `sheet_rank` and `rank`, and the rest is filled in.
+Typed `user`, `nickname` or `roblox_id` still win, and details sent about one person
+are never used for another.
+
+- Only the bot set with `/config ticket_bot` is listened to. The same message from a
+  person or any other bot is ignored. A broken `bc!hire` from the ticket bot gets a
+  reply saying what was wrong
+- The ticket bot needs to be able to post in the ticket, and this bot needs to be
+  able to read it
+- Details are kept in `data/pendinghires.json` only until `/hire` uses them, the
+  ticket channel is deleted, or 30 days pass
+
 **Command log.** Every command used in the hub or the main server is posted to the
 main server's `log_channel`: the command, who ran it, where, and when. Never what
 was typed into it.
@@ -176,6 +193,7 @@ role View Channel and take it away from everyone else.
 | `handlers/hrcommand.js` | The HR permission check and plain-English roster errors |
 | `handlers/hrnotices.js` | The welcome message and staff action embeds |
 | `handlers/commandlog.js` | The "Command Used" log |
+| `handlers/botcomms.js` | `bc!` messages from other bots, and the ticket details `/hire` uses |
 | `handlers/rankcommand.js` | `/promote` and `/demote`, built from one definition |
 | `handlers/ratingcommand.js` | `/setperformancerating` and `/setactivityrating`, built from one definition |
 | `tools/check-hr.js` | Tests every roster write against a simulated sheet |

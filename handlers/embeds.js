@@ -60,7 +60,9 @@ function reportBoxEmbed() {
     .setDescription([
       'Have a problem with a member of staff? Press the button below to file a report with the HR department.',
       '',
-      'Reports are **not anonymous**. Your name is attached so HR can follow up with you, and only the HR department can read them.',
+      'Reports are not anonymous. Your name is attached so HR can follow up with you, and only the HR, Executives and Ownership can read and handle your report.',
+      '',
+      '**Please note**: Informational Technology ( IT ) staff can access your reports but won\'t interact with them',
     ].join('\n'));
 }
 

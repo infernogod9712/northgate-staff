@@ -875,6 +875,26 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return (!w.ch.here.sent.length && !newbie.dms.length && !newbieMember.roles.added.length) || 'welcomed or ranked someone who is not on the roster';
   });
 
+  await check('outside a ticket with no nickname, the roster gets their Discord username, not their server nickname', async () => {
+    const w = world();
+    const { newbie, newbieMember, rank } = hireSetup(w);
+    newbieMember.displayName = 'NGC | Server Nickname';
+    newbie.globalName = 'Global Display Name';
+    const i = await run(w, 'hire', { user: newbie, department: 'development', sheet_rank: 'Developer', rank });
+    const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW);
+    if (!row) return `not on the roster. said: ${said(i)}`;
+    return row.nick === newbie.username || `roster says ${JSON.stringify(row.nick)}, expected ${newbie.username}`;
+  });
+
+  await check('a typed nickname still beats the username', async () => {
+    const w = world();
+    const { newbie, newbieMember, rank } = hireSetup(w);
+    newbieMember.displayName = 'NGC | Server Nickname';
+    await run(w, 'hire', { user: newbie, department: 'development', sheet_rank: 'Developer', rank, nickname: 'Typed Name' });
+    const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW);
+    return row?.nick === 'Typed Name' || `roster says ${JSON.stringify(row?.nick)}`;
+  });
+
   // =========================================================================
   section('Hiring from a ticket: bc!hire');
   // =========================================================================

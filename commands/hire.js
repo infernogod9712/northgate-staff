@@ -15,7 +15,8 @@ const { pendingHire, clearPendingHire } = require('../handlers/botcomms');
 // Discord ID, nickname and Roblox ID (handlers/botcomms.js). Run /hire in that
 // ticket with only department, sheet_rank and rank, and the rest is filled in.
 // Anything typed into user, roblox_id or nickname still wins, and the ticket's
-// details are only ever used for the person they were sent about.
+// details are only ever used for the person they were sent about. Outside a
+// ticket, with no nickname typed, the roster gets their Discord username.
 //
 // sheet_rank and rank match /promote on purpose: one name for one idea across the
 // commands HR uses together.
@@ -43,7 +44,7 @@ module.exports = {
     .addStringOption((o) => o.setName('roblox_id').setDescription('Their Roblox user ID. Leave empty in a hiring ticket to use the ticket\'s').setMaxLength(20))
     .addStringOption((o) => o
       .setName('nickname')
-      .setDescription('Name for the roster. Leave empty to use the ticket\'s, or their name in this server')
+      .setDescription('Name for the roster. Leave empty to use the ticket\'s, or their Discord username')
       .setMaxLength(50)),
 
   async execute(interaction) {
@@ -88,7 +89,10 @@ module.exports = {
       return interaction.editReply({ content: `I cannot give **${rank.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.` });
     }
 
-    const nickname = (interaction.options.getString('nickname') || ticket?.nickname || member.displayName || target.globalName || target.username).trim();
+    // Their Discord username, not their nickname in this server. A server nickname
+    // is often a rank tag or a joke, and the roster wants the name that follows the
+    // person across the whole community.
+    const nickname = (interaction.options.getString('nickname') || ticket?.nickname || target.username).trim();
 
     try {
       await getWriter().hire({

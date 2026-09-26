@@ -896,6 +896,82 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   });
 
   // =========================================================================
+  section('Banned users');
+  // =========================================================================
+  const { isBanned, BANNED_USERS, BANNED_MESSAGE } = require(path.join(ROOT, 'handlers', 'permissions'));
+  const BANNED = BANNED_USERS[0];
+
+  await check('the banned list is not empty and holds Discord ids', () => {
+    if (!BANNED_USERS.length) return 'the banned list is empty';
+    const bad = BANNED_USERS.filter((id) => !/^\d{17,20}$/.test(id));
+    return !bad.length || `not Discord ids: ${bad.join(', ')}`;
+  });
+
+  await check('isBanned matches only the ids on the list', () => {
+    if (!isBanned(BANNED)) return 'did not match the id as text';
+    if (isBanned('700000000000000001')) return 'banned somebody who is not on the list';
+    // Not tested with a Number: a 19 digit snowflake is past the safe integer
+    // range, so it is already corrupted before it reaches isBanned.
+    return !isBanned('') && !isBanned(undefined) || 'banned a blank id';
+  });
+
+  await check('a banned person cannot use an HR command, even holding the HR role', async () => {
+    const w = world();
+    const u = fakeUser(BANNED, 'banned');
+    const m = join(w.main, u, [HR]);
+    const before = w.sheet.snapshot();
+    const i = fakeInteraction({ client: w.client, guild: w.main, member: m, user: u, options: { user: fakeUser(ID.B), note: 'test' }, channel: w.ch.here });
+    await cmd('addnote').execute(i);
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    return said(i).includes(BANNED_MESSAGE) || said(i);
+  });
+
+  await check('Administrator does not beat the ban', async () => {
+    const w = world();
+    const u = fakeUser(BANNED, 'banned');
+    const m = join(w.main, u, [], true);
+    if (await canManageHR(m)) return 'canManageHR let an Administrator through';
+    const before = w.sheet.snapshot();
+    const i = fakeInteraction({ client: w.client, guild: w.main, member: m, user: u, options: { user: fakeUser(ID.B), reason: 'test' }, channel: w.ch.here });
+    await cmd('suspend').execute(i);
+    if (w.sheet.snapshot() !== before) return 'the roster changed';
+    return said(i).includes(BANNED_MESSAGE) || said(i);
+  });
+
+  await check('Staff Leadership in the hub does not beat the ban', async () => {
+    const w = world();
+    const u = fakeUser(BANNED, 'banned');
+    join(w.hub, u, [LEAD]);
+    const m = join(w.main, u, []);
+    return (await canManageHR(m)) === false || 'Staff Leadership got through';
+  });
+
+  await check('a banned person cannot promote or demote either', async () => {
+    for (const name of ['promote', 'demote']) {
+      const w = world();
+      const u = fakeUser(BANNED, 'banned');
+      join(w.hub, u, [LEAD]);
+      const m = join(w.main, u, []);
+      const target = fakeUser(ID.B, 'target');
+      const tm = join(w.main, target, []);
+      const before = w.sheet.snapshot();
+      const i = fakeInteraction({ client: w.client, guild: w.main, member: m, user: u, channel: w.ch.here, options: { user: target, sheet_rank: 'x', previous_rank: { id: '500000000000000004', name: 'Staff', editable: true }, new_rank: { id: RANK, name: 'Senior', editable: true }, reason: 'r' } });
+      await cmd(name).execute(i);
+      if (w.sheet.snapshot() !== before) return `${name} changed the roster`;
+      if (tm.roles.added.length) return `${name} gave a role`;
+      if (!said(i).includes(BANNED_MESSAGE)) return `${name} said: ${said(i)}`;
+    }
+    return true;
+  });
+
+  await check('everybody else still gets in', async () => {
+    const w = world();
+    const i = await run(w, 'addnote', { user: fakeUser(ID.B), note: 'still works' });
+    if (said(i).includes(BANNED_MESSAGE)) return 'banned an ordinary HR member';
+    return w.sheet.rowsFor(OFFICIAL, ID.B)[0].notes.includes('still works') || said(i);
+  });
+
+  // =========================================================================
   section('Hiring from a ticket: bc!hire');
   // =========================================================================
   const { handleBotMessage, parseHire, pendingHire, MAX_AGE } = require(path.join(ROOT, 'handlers', 'botcomms'));

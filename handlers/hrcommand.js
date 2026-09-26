@@ -3,13 +3,21 @@
 // into a sentence HR can act on.
 
 const { MessageFlags } = require('discord.js');
-const { canManageHR } = require('./permissions');
+const { canManageHR, isBanned, BANNED_MESSAGE } = require('./permissions');
 const { labelFor } = require('./departments');
 
 // Defers privately, then checks permission. Returns false after answering the
 // person if they are not allowed, so the command must stop.
+//
+// A banned person is told they are banned rather than told which role they are
+// missing, because the role is not the reason and handing them one would not
+// help.
 async function startHrCommand(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (isBanned(interaction.user.id)) {
+    await interaction.editReply({ content: BANNED_MESSAGE });
+    return false;
+  }
   if (await canManageHR(interaction.member)) return true;
   await interaction.editReply({ content: 'You need the HR role, Staff Leadership, or Administrator to use this.' });
   return false;

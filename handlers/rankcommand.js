@@ -19,7 +19,7 @@
 
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { hubSettings } = require('./settings');
-const { canManageStaff } = require('./permissions');
+const { canManageStaff, isBanned, BANNED_MESSAGE } = require('./permissions');
 const { rankChangeEmbed } = require('./embeds');
 const { getWriter } = require('./rosterWriter');
 const { explain } = require('./hrcommand');
@@ -59,6 +59,9 @@ function rankCommand(kind) {
     async execute(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      if (isBanned(interaction.user.id)) {
+        return interaction.editReply({ content: BANNED_MESSAGE });
+      }
       if (!(await canManageStaff(interaction.member))) {
         return interaction.editReply({ content: 'You need the Staff Leadership role to use this.' });
       }

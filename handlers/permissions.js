@@ -6,9 +6,25 @@
 //                    Runs /promote, /demote and /reportembed.
 //   canManageHR    - canManageStaff, or the HR role in the MAIN server. Runs the
 //                    HR commands that edit the roster.
+//   isBanned       - a hard block that beats every role, including Administrator.
 const { PermissionFlagsBits } = require('discord.js');
 const { ownerIds } = require('../config');
 const { getServers, getSettings } = require('./settings');
+
+// People who may not use the HR commands, whatever roles they hold. This is
+// checked before anything else, so giving them the HR role, Staff Leadership or
+// even Administrator does not get them back in. Take an id out of this list to
+// give someone their access back.
+const BANNED_USERS = [
+  '1419379683455271034',
+];
+
+// One wording, used everywhere a banned person is turned away.
+const BANNED_MESSAGE = 'You are not permitted to use HR commands.';
+
+function isBanned(userId) {
+  return BANNED_USERS.includes(String(userId));
+}
 
 function isOwner(userId) {
   return ownerIds.includes(userId);
@@ -27,6 +43,8 @@ function isAdmin(member) {
 // server from the one the interaction came from.
 async function canManageStaff(member) {
   if (!member) return false;
+  // Before the Administrator check on purpose, so a ban cannot be out-ranked.
+  if (isBanned(member.id)) return false;
   if (isAdmin(member)) return true;
 
   const { hub } = getServers();
@@ -73,6 +91,7 @@ function isPubliclyReadable(channel) {
 // their commands from either server.
 async function canManageHR(member) {
   if (!member) return false;
+  if (isBanned(member.id)) return false;
   if (await canManageStaff(member)) return true;
 
   const { main } = getServers();
@@ -88,4 +107,4 @@ async function canManageHR(member) {
   return !!mainMember && mainMember.roles.cache.has(role);
 }
 
-module.exports = { isOwner, isAdmin, canManageStaff, canManageHR, isPubliclyReadable };
+module.exports = { isOwner, isAdmin, canManageStaff, canManageHR, isPubliclyReadable, isBanned, BANNED_USERS, BANNED_MESSAGE };

@@ -58,6 +58,9 @@ class RosterError extends Error {
 // correctly, and both have to match the same dropdown option.
 const canon = (text) => squash(text).replace('absense', 'absence');
 
+// The status /hire gives someone for their first two weeks.
+const NEW_HIRE = 'New Hire';
+
 // A Warnings or Infractions cell that says any of these holds nothing yet, so the
 // first real entry replaces it instead of being appended under "None".
 const EMPTY_WORDS = new Set(['', 'none', 'n/a', 'na', '-']);
@@ -266,7 +269,9 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
         roles: text(role),
         performance: number(0),
         activity: number(0),
-        status: text(exactOption(t, 'status', 'Active')),
+        // New Hire, not Active: handlers/newhires.js turns it into Active two
+        // weeks later unless HR has changed it before then.
+        status: text(exactOption(t, 'status', NEW_HIRE)),
         dateHired: text(date),
         warnings: text('None'),
         infractions: text('None'),
@@ -405,6 +410,26 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
     });
   }
 
+  // Ends someone's New Hire period. Unlike setStatus this changes only the rows
+  // that still say New Hire, and leaves every other row alone: someone already on
+  // staff who is hired into a second department has an Active row and a New Hire
+  // row, and only the new one should move. A row HR has changed to anything else
+  // in the meantime is not touched either.
+  function activateNewHire({ discordId }) {
+    return serial(async () => {
+      const { official: t } = await tables();
+      const mine = personRows(await readRows(t), discordId);
+      const fresh = mine.filter((r) => canon(r.status) === canon(NEW_HIRE));
+      if (!fresh.length) {
+        const current = [...new Set(mine.map((r) => r.status))];
+        throw new RosterError('wrong_status', `their status is ${current.join(' / ')}`, { current });
+      }
+      const exact = exactOption(t, 'status', 'Active');
+      await api.batchUpdate(fresh.map((r) => cellsAt(t, r.row, t.cols.status, [text(exact)])));
+      return { rows: fresh.length, departments: fresh.map((r) => r.department) };
+    });
+  }
+
   // Adds a line to Notes, Warnings or Infractions on every row the person has.
   // Never overwrites, except a cell that only says "None".
   function appendText({ discordId, field, line }) {
@@ -436,7 +461,7 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
     });
   }
 
-  return { isConfigured: api.isConfigured, hire, fire, setRating, setRole, setStatus, appendText };
+  return { isConfigured: api.isConfigured, hire, fire, setRating, setRole, setStatus, activateNewHire, appendText };
 }
 
 // The running bot has one writer, so its queue really does cover every command.
@@ -460,4 +485,4 @@ function setWriter(replacement) {
   writer = replacement;
 }
 
-module.exports = { createRosterWriter, RosterError, getWriter, setWriter, formatDate, FIELDS };
+module.exports = { createRosterWriter, RosterError, getWriter, setWriter, formatDate, FIELDS, NEW_HIRE };

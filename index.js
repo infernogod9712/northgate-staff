@@ -7,6 +7,7 @@ const { isOwner } = require('./handlers/permissions');
 const { startAutoSync } = require('./git-sync');
 const { startHrPanel } = require('./handlers/hrpanel');
 const { startLeaveChecks } = require('./handlers/leave');
+const { startNewHireChecks } = require('./handlers/newhires');
 const { logCommand } = require('./handlers/commandlog');
 const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
 
@@ -55,6 +56,11 @@ client.once(Events.ClientReady, () => {
     startLeaveChecks(client);
   } catch (e) {
     console.error('[leave] failed to start:', e.message);
+  }
+  try {
+    startNewHireChecks();
+  } catch (e) {
+    console.error('[newhires] failed to start:', e.message);
   }
 });
 

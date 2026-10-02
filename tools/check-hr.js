@@ -63,7 +63,7 @@ fs.writeFileSync(KEY_PATH, JSON.stringify({ type: 'service_account', client_emai
 const OFFICIAL = 'OFFICAL STAFF ROSTER';
 const FORMER = 'FORMER STAFF ROSTER';
 const COLUMNS = ['nickname', 'Discord ID', 'Roblox ID', 'Roles ', 'Performance', 'Activity', 'Employment Status', 'DATE HIRED', 'Warnings', 'Infractions', 'Notes'];
-const OFFICIAL_STATUS = ['Active ', 'Reduced Activity ', 'Leave of Absense', 'Suspended', 'Terminated', 'Administrative Leave'];
+const OFFICIAL_STATUS = ['Active ', 'Reduced Activity ', 'Leave of Absense', 'Suspended', 'Terminated', 'Administrative Leave', 'New Hire'];
 const FORMER_STATUS = ['Retired', 'Terminated'];
 
 const ID = {
@@ -394,11 +394,12 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   const writerModule = require(path.join(ROOT, 'handlers', 'rosterWriter'));
   const { canManageHR } = require(path.join(ROOT, 'handlers', 'permissions'));
   const { createLeaveManager, parseUntil, setLeaveManager } = require(path.join(ROOT, 'handlers', 'leave'));
+  const { createNewHireManager, setNewHireManager, NEW_HIRE_DAYS } = require(path.join(ROOT, 'handlers', 'newhires'));
   const { logCommand } = require(path.join(ROOT, 'handlers', 'commandlog'));
   const cmd = (name) => require(path.join(ROOT, 'commands', `${name}.js`));
 
   const resetData = () => {
-    for (const f of ['settings.json', 'leave.json', 'pendinghires.json']) {
+    for (const f of ['settings.json', 'leave.json', 'pendinghires.json', 'newhires.json']) {
       try { fs.unlinkSync(path.join(DATA, f)); } catch {}
     }
   };
@@ -447,11 +448,11 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return w.sheet.model[OFFICIAL].table.endRowIndex === before || 'the table grew when a blank was available';
   });
 
-  await check('the status is written with the exact dropdown text, trailing space included', async () => {
+  await check('a hire starts as New Hire, written with the exact dropdown text', async () => {
     const w = world();
     await w.writer.hire({ nickname: 'New', discordId: ID.NEW, robloxId: '', role: 'Staff', section: 'COMMUNITY OUTREACH DEPARTMENT', date: 'Today' });
     const [row] = w.sheet.rowsFor(OFFICIAL, ID.NEW);
-    return row?.status === 'Active ' || `wrote ${JSON.stringify(row?.status)}`;
+    return row?.status === 'New Hire' || `wrote ${JSON.stringify(row?.status)}`;
   });
 
   await check('a Discord ID is written as text and ratings as numbers', async () => {
@@ -784,6 +785,100 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     await l.manager.begin({ discordId: ID.B, status: 'Leave of Absence', until: l.now() + 5000, by: 'hr' });
     const fresh = createLeaveManager({ writer: l.writer, now: l.now, log: { warn: () => {} } });
     return !!fresh.list()[ID.B] || 'a new process did not see the leave';
+  });
+
+  // =========================================================================
+  section('New Hires become Active by themselves');
+  // =========================================================================
+  const TWO_WEEKS = NEW_HIRE_DAYS * 86_400_000;
+
+  function newHireWorld() {
+    const w = world();
+    let now = Date.UTC(2026, 9, 1, 12);
+    const manager = createNewHireManager({ writer: w.writer, now: () => now, log: { warn: () => {}, log: () => {} } });
+    const hire = async (discordId, section) => {
+      await w.writer.hire({ nickname: 'New', discordId, robloxId: '', role: 'Staff', section, date: 'Today' });
+      manager.track({ discordId, department: section, by: 'hr' });
+    };
+    return { ...w, manager, hire, advance: (ms) => { now += ms; } };
+  }
+  const statusOf = (w, id) => w.sheet.rowsFor(OFFICIAL, id).map((r) => r.status);
+
+  await check('it is two weeks', () => NEW_HIRE_DAYS === 14 || `it is ${NEW_HIRE_DAYS} days`);
+
+  await check('nothing changes before the two weeks are up', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.NEW, 'PUBLIC RELATIONS TEAM');
+    n.advance(TWO_WEEKS - 60_000);
+    await n.manager.checkDue();
+    if (!n.manager.list()[ID.NEW]) return 'forgot them early';
+    return statusOf(n, ID.NEW)[0] === 'New Hire' || `status ${JSON.stringify(statusOf(n, ID.NEW))}`;
+  });
+
+  await check('after two weeks a New Hire becomes Active, with the exact dropdown text', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.NEW, 'PUBLIC RELATIONS TEAM');
+    n.advance(TWO_WEEKS);
+    await n.manager.checkDue();
+    if (statusOf(n, ID.NEW)[0] !== 'Active ') return `status ${JSON.stringify(statusOf(n, ID.NEW))}`;
+    return !n.manager.list()[ID.NEW] || 'still remembered after being activated';
+  });
+
+  // The rule the feature was asked for: a change made before the two weeks wins.
+  await check('a status HR changed before the two weeks were up is left alone', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.NEW, 'PUBLIC RELATIONS TEAM');
+    await n.writer.setStatus({ discordId: ID.NEW, status: 'Suspended' });
+    n.advance(TWO_WEEKS);
+    await n.manager.checkDue();
+    if (statusOf(n, ID.NEW)[0] !== 'Suspended') return `CHANGED IT TO ${JSON.stringify(statusOf(n, ID.NEW))}`;
+    return !n.manager.list()[ID.NEW] || 'kept checking someone it should have dropped';
+  });
+
+  await check('someone already on staff hired into a second department: only the new row changes', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.B, 'PUBLIC RELATIONS TEAM');
+    const before = n.sheet.rowsFor(OFFICIAL, ID.B).map((r) => `${r.department}=${r.status}`).sort().join(', ');
+    if (before !== 'COMMUNITY OUTREACH DEPARTMENT=Active , PUBLIC RELATIONS TEAM=New Hire') return `after the hire: ${before}`;
+    n.advance(TWO_WEEKS);
+    await n.manager.checkDue();
+    const after = statusOf(n, ID.B);
+    return after.every((s) => s === 'Active ') || `after two weeks: ${JSON.stringify(after)}`;
+  });
+
+  await check('someone fired before the two weeks are up is just forgotten', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.NEW, 'PUBLIC RELATIONS TEAM');
+    await n.writer.fire({ discordId: ID.NEW, section: 'PUBLIC RELATIONS TEAM', type: 'Terminated', reason: 'r', by: 'hr', date: 'Today' });
+    n.advance(TWO_WEEKS);
+    await n.manager.checkDue();
+    return !n.manager.list()[ID.NEW] || 'still remembered';
+  });
+
+  await check('if Google is down at the two week mark, it is retried rather than forgotten', async () => {
+    const n = newHireWorld();
+    await n.hire(ID.NEW, 'PUBLIC RELATIONS TEAM');
+    n.advance(TWO_WEEKS);
+    n.sheet.failNextWrite(503);
+    await n.manager.checkDue();
+    if (!n.manager.list()[ID.NEW]) return 'forgot them after one failure';
+    await n.manager.checkDue();
+    return statusOf(n, ID.NEW)[0] === 'Active ' || 'did not succeed on the retry';
+  });
+
+  await check('/hire starts the two weeks and tells HR the date', async () => {
+    const w = world();
+    const manager = createNewHireManager({ writer: w.writer, log: { warn: () => {}, log: () => {} } });
+    setNewHireManager(manager);
+    const newbie = fakeUser(ID.NEW, 'newbie');
+    join(w.main, newbie, []);
+    const i = await run(w, 'hire', { user: newbie, department: 'development', sheet_rank: 'Developer', rank: { id: RANK, name: 'Developer', editable: true } });
+    setNewHireManager(null);
+    const entry = manager.list()[ID.NEW];
+    if (!entry) return `not tracked. said: ${said(i)}`;
+    if (entry.activeAt - entry.hiredAt !== TWO_WEEKS) return 'the timer is not two weeks';
+    if (statusOf(w, ID.NEW)[0] !== 'New Hire') return `roster says ${JSON.stringify(statusOf(w, ID.NEW))}`;
+    return /New Hire.*Active.*<t:\d+:D>/s.test(said(i)) || said(i);
   });
 
   // =========================================================================

@@ -4,10 +4,13 @@ const { getWriter, formatDate } = require('../handlers/rosterWriter');
 const { byValue, hiringChoices } = require('../handlers/departments');
 const { welcomeEmbed, dm } = require('../handlers/hrnotices');
 const { pendingHire, clearPendingHire } = require('../handlers/botcomms');
+const { getNewHireManager } = require('../handlers/newhires');
 
 // /hire [department] [sheet_rank] [rank] [user] [roblox_id] [nickname]
 // Adds the person to the bottom of their department on the Official Staff Roster
-// (Active, 0 stars, today's date, no warnings or infractions) with their title in
+// (New Hire, 0 stars, today's date, no warnings or infractions; New Hire turns
+// into Active two weeks later unless HR changes it first, see
+// handlers/newhires.js) with their title in
 // the Roles column, gives them the rank role, then welcomes them in this channel
 // with a link to the staff handbook and DMs them a copy.
 //
@@ -110,6 +113,16 @@ module.exports = {
     // Used, so it is not kept a moment longer than needed.
     if (ticket) clearPendingHire(channelId);
 
+    // They are on the roster as New Hire. Start their two weeks. A failure here
+    // leaves them as New Hire for HR to change by hand, and must not undo a hire
+    // that has already happened.
+    let activeAt = null;
+    try {
+      activeAt = getNewHireManager().track({ discordId: target.id, department: department.section, by: interaction.user.id }).activeAt;
+    } catch (err) {
+      console.error('[hire] could not start the New Hire period:', err.message);
+    }
+
     let roleProblem = null;
     try {
       await member.roles.add(rank.id, `Hired by ${interaction.user.username} into ${department.label}`);
@@ -129,6 +142,9 @@ module.exports = {
     const lines = [roleProblem
       ? `Hired <@${target.id}> into **${department.label}** as **${title}** and added them to the roster.`
       : `Hired <@${target.id}> into **${department.label}** as **${title}**, gave them <@&${rank.id}>, and added them to the roster.`];
+    lines.push(activeAt
+      ? `Their status is **New Hire**. It becomes **Active** by itself on <t:${Math.floor(activeAt / 1000)}:D>, unless it is changed before then.`
+      : 'Their status is **New Hire**, but I could not start the two week timer, so change it to Active by hand when they are ready.');
     if (ticket) lines.push(`Used the ticket bot's details: nickname **${nickname}**${robloxId ? `, Roblox ID ${robloxId}` : ''}.`);
     if (pending && !ticket) lines.push(`This ticket's bc!hire details are for <@${pending.discordId}>, not them, so they were not used.`);
     if (roleProblem) lines.push(roleProblem);

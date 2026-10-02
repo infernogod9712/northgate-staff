@@ -50,7 +50,7 @@ It needs no token and no network, and never touches `data/`.
 
 | Command | Who can run it | What it does |
 | --- | --- | --- |
-| `/hire` | HR | Adds them to the roster under a department, gives the rank role, welcomes them with the staff handbook. In a hiring ticket, the person, nickname and Roblox ID come from the ticket bot's `bc!hire` |
+| `/hire` | HR | Adds them to the roster under a department as New Hire (Active two weeks later), gives the rank role, welcomes them with the staff handbook. In a hiring ticket, the person, nickname and Roblox ID come from the ticket bot's `bc!hire` |
 | `/promote` | Staff Leadership | Sets their roster title (`sheet_rank`), takes away `previous_rank`, gives `new_rank`, logs it in the promotion log, DMs them |
 | `/demote` | Staff Leadership | The same as `/promote`, logged in the infraction log instead |
 | `/fire` | HR | Moves them out of one department to the same department on the Former Staff Roster, as Retired or Terminated. Removes them from the staff hub when it was their last department |
@@ -137,6 +137,13 @@ alone and the leave log says so. The leave log is a forum: each leave gets its o
 post, and a new end date, ending it early, or the bot ending it are all added inside
 that same post.
 
+**New Hires.** `/hire` puts someone on the roster as **New Hire**, not Active. Two
+weeks later a check (every hour) sets them to Active, remembered in
+`data/newhires.json` across restarts. Like leave, it only undoes its own change:
+only rows that still say New Hire are changed, so if HR has already set them to
+anything else, that stands. The status dropdown on the roster must include a
+"New Hire" option, or `/hire` refuses with a layout error.
+
 **Hiring from a ticket.** When a hiring ticket opens, the ticket bot sends
 `bc!hire <Discord ID> <nickname> <Roblox ID>` in the ticket channel ("bc" is bot
 communication). The nickname can have spaces. This bot reacts with ✅ and remembers
@@ -189,6 +196,7 @@ role View Channel and take it away from everyone else.
 | `handlers/hrpanel.js` | Builds the HR panel embed and keeps the panels updated |
 | `handlers/rosterWriter.js` | Every change the bot makes to the Employee Database |
 | `handlers/leave.js` | Leave end dates, and returning people to Active when they pass |
+| `handlers/newhires.js` | The two week New Hire period, and setting people to Active when it ends |
 | `handlers/departments.js` | Maps department names in Discord to the roster's section headers |
 | `handlers/hrcommand.js` | The HR permission check and plain-English roster errors |
 | `handlers/hrnotices.js` | The welcome message and staff action embeds |

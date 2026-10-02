@@ -1,4 +1,5 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
+const { terminationLetter, letterFileName } = require('../handlers/letters');
 const { startHrCommand, explain } = require('../handlers/hrcommand');
 const { getWriter, formatDate } = require('../handlers/rosterWriter');
 const { getServers, hubSettings } = require('../handlers/settings');
@@ -15,11 +16,48 @@ const { COLORS } = require('../handlers/embeds');
 // from the staff hub only when that was their last department, because anyone
 // still on the Official roster is still staff.
 //
+// A Terminated firing also gets the Employment Termination letter: NorthGate's
+// Canva design filled in with their details (handlers/letters.js), sent with the
+// DM and attached to the infraction log post. appealable, authorized_by,
+// cosigned_by and statement only feed that letter.
+//
 // The order matters. The hub is checked before anything happens, so a Fire that
 // cannot remove them changes nothing at all. The roster move happens before the
 // removal, so if Google is down they are not kicked from a hub while still listed
 // as staff. The DM goes before the kick, because a removed member can no longer
 // always be messaged.
+// A signature on the letter: their roster nickname and title if they are on the
+// roster, otherwise their name in this server and their highest role.
+async function signerFor(interaction, user) {
+  if (!user) return null;
+  const listed = await getWriter().lookup({ discordId: user.id }).catch(() => null);
+  if (listed?.nickname) return { name: listed.nickname, title: listed.title || '' };
+  const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+  const role = member?.roles?.highest;
+  return {
+    name: member?.displayName || user.globalName || user.username,
+    title: role && role.id !== interaction.guild.id ? role.name : '',
+  };
+}
+
+// Fills in the Employment Termination letter (handlers/letters.js). Null when the
+// template is not on this machine.
+async function buildLetter(interaction, { target, result, reason, appealable, statement, authorizedBy, cosignedBy }) {
+  const name = result.nickname || target.globalName || target.username;
+  const pdf = await terminationLetter({
+    name,
+    username: target.username,
+    title: result.title,
+    appealable: appealable?.trim() || 'No',
+    reason,
+    statement: statement?.trim() || '',
+    issuer: await signerFor(interaction, interaction.user),
+    authorizer: await signerFor(interaction, authorizedBy),
+    cosigner: await signerFor(interaction, cosignedBy),
+  });
+  return pdf ? { pdf, name: letterFileName(name) } : null;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('fire')
@@ -35,7 +73,18 @@ module.exports = {
       .setDescription('Why they are leaving')
       .setRequired(true)
       .addChoices({ name: 'Retired', value: 'Retired' }, { name: 'Terminated', value: 'Terminated' }))
-    .addStringOption((o) => o.setName('reason').setDescription('Goes into their roster notes').setRequired(true).setMaxLength(500)),
+    .addStringOption((o) => o.setName('reason').setDescription('Goes into their roster notes').setRequired(true).setMaxLength(500))
+    // The rest only fill in the termination letter, which only Terminated gets.
+    .addStringOption((o) => o
+      .setName('appealable')
+      .setDescription('Letter: can they appeal, for example "Yes, after 2 weeks". Leave empty for No')
+      .setMaxLength(60))
+    .addUserOption((o) => o.setName('authorized_by').setDescription('Letter: who authorized it. Signs the second line'))
+    .addUserOption((o) => o.setName('cosigned_by').setDescription('Letter: a third signature, if there is one'))
+    .addStringOption((o) => o
+      .setName('statement')
+      .setDescription('Letter: anything extra for the Additional Statements box')
+      .setMaxLength(600)),
 
   async execute(interaction) {
     if (!(await startHrCommand(interaction))) return;
@@ -96,7 +145,31 @@ module.exports = {
       by: interaction.user,
     });
 
-    const dmed = await dm(target, embed);
+    // The termination letter, for Terminated only. Made before the DM so it can
+    // go with it. A letter that cannot be made never stops the firing.
+    let letter = null;
+    let letterProblem = null;
+    if (!retired) {
+      try {
+        letter = await buildLetter(interaction, {
+          target,
+          result,
+          reason,
+          department,
+          appealable: interaction.options.getString('appealable'),
+          statement: interaction.options.getString('statement'),
+          authorizedBy: interaction.options.getUser('authorized_by'),
+          cosignedBy: interaction.options.getUser('cosigned_by'),
+        });
+        if (!letter) letterProblem = 'No termination letter was made: the letter template is not on this machine (assets/private/termination-template.png).';
+      } catch (err) {
+        console.error('[fire] could not make the termination letter:', err);
+        letterProblem = `No termination letter was made: ${err.message}.`;
+      }
+    }
+    const files = () => (letter ? [new AttachmentBuilder(letter.pdf, { name: letter.name })] : []);
+
+    const dmed = await dm(target, embed, files());
 
     let removal;
     if (!leftStaff) {
@@ -118,6 +191,7 @@ module.exports = {
     const logged = await postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
       content: `<@${target.id}>`,
       embeds: [embed],
+      files: files(),
       allowedMentions: { parse: [] },
     });
     require('../handlers/hrpanel').refreshSoon();
@@ -129,6 +203,10 @@ module.exports = {
     if (result.addedSection) lines.push(`The Former Staff Roster had no ${department.label} section, so I added one.`);
     if (!logged) lines.push('Could not log it. Set infract_channel with /config in the staff hub.');
     if (!dmed) lines.push('Their DMs are closed, so they were not told.');
+    if (letter) {
+      lines.push(`Made their termination letter${dmed ? ', sent it to them' : ''}${logged ? `${dmed ? ' and' : ','} attached it to the infraction log` : ''}.`);
+    }
+    if (letterProblem) lines.push(letterProblem);
     if (warning) lines.push(warning);
     return interaction.editReply({ content: lines.join('\n') });
   },

@@ -7,3 +7,7 @@ data/
 google-credentials.json
 *service-account*.json
 *credentials*.json
+
+# The termination letter template. NorthGate Studios copyright: it must not be
+# reproduced, and this repo is public. Copied onto the Pi by hand.
+assets/private/

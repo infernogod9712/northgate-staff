@@ -160,7 +160,7 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
         department = nickname;
         row.department = nickname;
       } else {
-        Object.assign(row, { kind: 'person', nickname, discordId, status });
+        Object.assign(row, { kind: 'person', nickname, discordId, status, title: text('roles') });
       }
       rows.push(row);
     }
@@ -367,7 +367,12 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
       const after = await tables();
       const stillThere = inSection(await readRows(after.official));
       const formerNow = inSection(await readRows(after.former));
-      const result = { moved: mine.length, department, remaining, addedSection: !existing };
+      // nickname and title are what the roster called them, for the termination
+      // letter, which should match the roster rather than a Discord name.
+      const result = {
+        moved: mine.length, department, remaining, addedSection: !existing,
+        nickname: mine[0].nickname, title: mine[0].title,
+      };
       if (stillThere || formerNow < formerBefore + mine.length) {
         throw new RosterError('verify', 'the roster changed while they were being moved, so check both roster tabs', result);
       }
@@ -407,6 +412,16 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
       const exact = exactOption(t, 'status', status);
       await api.batchUpdate(mine.map((r) => cellsAt(t, r.row, t.cols.status, [text(exact)])));
       return { previous: current, rows: mine.length };
+    });
+  }
+
+  // Read only: what the Official roster calls someone and their title, or null if
+  // they are not on it. Used to sign the termination letter with roster titles.
+  function lookup({ discordId }) {
+    return serial(async () => {
+      const { official: t } = await tables();
+      const row = (await readRows(t)).find((r) => r.kind === 'person' && r.discordId === discordId);
+      return row ? { nickname: row.nickname, title: row.title } : null;
     });
   }
 
@@ -461,7 +476,7 @@ function createRosterWriter({ credentialsFile, sheetId, officialTab, formerTab, 
     });
   }
 
-  return { isConfigured: api.isConfigured, hire, fire, setRating, setRole, setStatus, activateNewHire, appendText };
+  return { isConfigured: api.isConfigured, hire, fire, lookup, setRating, setRole, setStatus, activateNewHire, appendText };
 }
 
 // The running bot has one writer, so its queue really does cover every command.

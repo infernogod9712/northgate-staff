@@ -93,9 +93,9 @@ async function postLeave(client, channelId, { title, payload, threadId }) {
   }
 }
 
-async function dm(user, embed) {
+async function dm(user, embed, files = []) {
   try {
-    await user.send({ embeds: [embed] });
+    await user.send({ embeds: [embed], files });
     return true;
   } catch {
     return false;

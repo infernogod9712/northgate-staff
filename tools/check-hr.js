@@ -1304,6 +1304,69 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   });
 
   // =========================================================================
+  section('The termination letter');
+  // =========================================================================
+  // The real template is NorthGate copyright and gitignored, so the tests use a
+  // plain white stand-in. What is tested is that a valid letter is made and goes
+  // where it should, not how it looks: that was checked by eye against HR's own
+  // filled-in example.
+  const { PDFDocument } = require(path.join(ROOT, 'node_modules', 'pdf-lib'));
+  const { letterFileName } = require(path.join(ROOT, 'handlers', 'letters'));
+  const STAND_IN = path.join(DATA, 'letter-template.png');
+  fs.writeFileSync(STAND_IN, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAAKCAIAAAAcmWhZAAAAFElEQVR4nGP8//8/AwwwwVl05AAAhCUDESlE2IcAAAAASUVORK5CYII=', 'base64'));
+  const pdfIn = (payload) => (payload?.files || []).find((f) => /\.pdf$/.test(f.name || ''));
+
+  async function fireWithLetter(type, options = {}) {
+    const w = world();
+    const target = fireSetup(w);
+    const i = await run(w, 'fire', { user: target, department: 'community_outreach', type, reason: 'test reason', ...options });
+    return { w, target, i };
+  }
+
+  process.env.NGS_LETTER_TEMPLATE = STAND_IN;
+
+  await check('a Terminated firing sends the letter with the DM and attaches it to the log', async () => {
+    const { w, target, i } = await fireWithLetter('Terminated', { appealable: 'Yes, after 2 weeks', statement: 'Extra words.' });
+    const dmFile = pdfIn(target.dms[0]);
+    const logFile = pdfIn(w.ch.infract.sent[0]);
+    if (!dmFile) return `no PDF in the DM. said: ${said(i)}`;
+    if (!logFile) return 'no PDF on the log post';
+    const doc = await PDFDocument.load(dmFile.attachment);
+    if (doc.getPageCount() !== 1) return `${doc.getPageCount()} pages`;
+    if (!/NorthGate-Termination-Bravo-\d{4}-\d{2}-\d{2}\.pdf/.test(dmFile.name)) return `named ${dmFile.name}`;
+    return /termination letter/.test(said(i)) || said(i);
+  });
+
+  await check('a Retired firing gets no letter', async () => {
+    const { w, target } = await fireWithLetter('Retired');
+    return (!pdfIn(target.dms[0]) && !pdfIn(w.ch.infract.sent[0])) || 'a retirement was sent a termination letter';
+  });
+
+  await check('with the template missing, the firing still happens and HR is told', async () => {
+    process.env.NGS_LETTER_TEMPLATE = path.join(DATA, 'no-such-template.png');
+    const { w, target, i } = await fireWithLetter('Terminated');
+    process.env.NGS_LETTER_TEMPLATE = STAND_IN;
+    if (w.sheet.rowsFor(OFFICIAL, ID.B).length) return 'they were not fired';
+    if (pdfIn(target.dms[0])) return 'sent a letter with no template';
+    return /No termination letter was made/.test(said(i)) || said(i);
+  });
+
+  await check('a very long reason and statement still make a valid letter', async () => {
+    const { w, target, i } = await fireWithLetter('Terminated', { reason: 'x'.repeat(500), statement: 'word '.repeat(120) });
+    const dmFile = pdfIn(target.dms[0]);
+    if (!dmFile) return `no letter. said: ${said(i)}`;
+    await PDFDocument.load(dmFile.attachment);
+    return true;
+  });
+
+  await check('a name that is not safe in a file name still gives a safe file name', () => {
+    const name = letterFileName('../../we ird/<name>', Date.UTC(2026, 9, 2));
+    return name === 'NorthGate-Termination-we-ird-name-2026-10-02.pdf' || name;
+  });
+
+  delete process.env.NGS_LETTER_TEMPLATE;
+
+  // =========================================================================
   section('/suspend, /unsuspend');
   // =========================================================================
   await check('/suspend sets Suspended and logs it', async () => {

@@ -137,6 +137,21 @@ alone and the leave log says so. The leave log is a forum: each leave gets its o
 post, and a new end date, ending it early, or the bot ending it are all added inside
 that same post.
 
+**Termination letters.** A `/fire` with type Terminated also makes the Employment
+Termination letter: HR's Canva design filled in with the person's roster name and
+title, the reason, the date, whether they can appeal (`appealable`), any
+`statement`, and typed signatures for whoever ran `/fire`, `authorized_by` and
+`cosigned_by`, each with their roster title. It goes with their DM and onto the
+infraction log post as a PDF. Retired gets none.
+
+The design is a blank export at `assets/private/termination-template.png`. It is
+NorthGate copyright and this repo is public, so it is gitignored and copied onto the
+Pi by hand. Without it, `/fire` works exactly as before and says no letter was made.
+To change the design, export the new blank from Canva at the same size (1366 x 3489)
+and replace the file; if anything moved, nudge its numbers in `SPOTS` at the top of
+`handlers/letters.js`. Fonts are DM Sans and Sacramento (`assets/fonts/`, SIL Open
+Font License), the closest free match to the Canva ones.
+
 **New Hires.** `/hire` puts someone on the roster as **New Hire**, not Active. Two
 weeks later a check (every hour) sets them to Active, remembered in
 `data/newhires.json` across restarts. Like leave, it only undoes its own change:
@@ -197,6 +212,7 @@ role View Channel and take it away from everyone else.
 | `handlers/rosterWriter.js` | Every change the bot makes to the Employee Database |
 | `handlers/leave.js` | Leave end dates, and returning people to Active when they pass |
 | `handlers/newhires.js` | The two week New Hire period, and setting people to Active when it ends |
+| `handlers/letters.js` | Fills in the Employment Termination letter PDF for `/fire` |
 | `handlers/departments.js` | Maps department names in Discord to the roster's section headers |
 | `handlers/hrcommand.js` | The HR permission check and plain-English roster errors |
 | `handlers/hrnotices.js` | The welcome message and staff action embeds |

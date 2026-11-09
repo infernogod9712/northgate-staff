@@ -23,6 +23,7 @@ const ACCESS_TEXT = {
   leadership: 'Staff Leadership (staff hub) or Administrator',
   admin: 'Administrator',
   owner: 'Bot owners',
+  everyone: 'Everyone',
 };
 
 function accessFor(name) {
@@ -30,12 +31,14 @@ function accessFor(name) {
   if (LEADERSHIP.includes(name)) return 'leadership';
   if (name === 'hrpanel') return 'admin';
   if (name === 'config') return 'owner';
+  if (name === 'n!ping') return 'everyone';
   return null;
 }
 
 async function evaluate(name, member) {
   const kind = accessFor(name);
   const text = ACCESS_TEXT[kind];
+  if (kind === 'everyone') return { result: 'allowed', reason: 'Available to everyone.' };
 
   if (kind === 'owner') {
     return isOwner(member.id)
@@ -66,6 +69,7 @@ function listPages(client) {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((command) => `• \`/${command.name}\` - ${command.description || 'No description provided.'}`);
   const prefixLines = [
+    '• `n!ping` - Check the bot is running and see its latency.',
     `• \`${PREFIX} <user> <command>\` - Check whether someone could run a command, without running it.`,
   ];
 
@@ -128,7 +132,7 @@ async function handleImpersonate(message) {
   const label = { allowed: '✅ WOULD EXECUTE', blocked: '❌ WOULD BE BLOCKED' }[access.result];
   await message.reply({
     content: [
-      `🔎 **${label}**: **${member.user.tag}** running \`/${targetCommand}\` (Staff Management)`,
+      `🔎 **${label}**: **${member.user.tag}** running \`${targetCommand.includes('!') ? targetCommand : `/${targetCommand}`}\` (Staff Management)`,
       '',
       access.reason,
       'No command was executed.',

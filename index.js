@@ -12,13 +12,14 @@ const { say } = require('./handlers/progress');
 const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
 const { registerEverywhere, registerInGuild } = require('./handlers/register');
 const { handleImpersonate } = require('./handlers/impersonate');
+const { isPing, replyPing } = require('./handlers/ping');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // needed for bc! and d!impersonate
+    GatewayIntentBits.MessageContent, // needed for bc!, n!ping and d!impersonate
   ],
 });
 
@@ -121,6 +122,12 @@ client.on(Events.MessageCreate, async (message) => {
       logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled.command, type: 'Bot command' });
     }
     return;
+  }
+
+  // n!ping: every NorthGate bot answers it.
+  if (isPing(message.content)) {
+    logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: 'n!ping', type: 'Prefix command' });
+    return void (await replyPing(message).catch((err) => console.error('[ping] failed:', err.message)));
   }
 
   // d!impersonate: the developer tool every NorthGate bot shares. This bot

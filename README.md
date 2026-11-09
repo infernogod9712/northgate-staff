@@ -62,6 +62,7 @@ It needs no token and no network, and never touches `data/`.
 | `/reportembed` | Staff Leadership | Posts the staff report panel |
 | `/hrpanel` | Administrators | Private snapshot of low performance and leave |
 | `/config` | Bot owners only | Sets every role and channel the bot uses |
+| `d!forcerestart ops` | Bot owners only | Restarts the bot straight away |
 | `d!impersonate <user> <command>` | Bot owners only | Says whether that person could run one of this bot's commands, without running it. `d!impersonate list` lists them all |
 
 ## HR panel

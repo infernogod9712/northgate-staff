@@ -13,6 +13,7 @@ const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
 const { registerEverywhere, registerInGuild } = require('./handlers/register');
 const { handleImpersonate } = require('./handlers/impersonate');
 const { isPing, replyPing } = require('./handlers/ping');
+const { isRestart, forceRestart } = require('./handlers/forcerestart');
 
 const client = new Client({
   intents: [
@@ -123,6 +124,12 @@ client.on(Events.MessageCreate, async (message) => {
       logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled.command, type: 'Bot command', args: message.content.trim().split(/\s+/).slice(1) });
     }
     return;
+  }
+
+  // d!forcerestart ops: restart this bot (owners only).
+  if (isRestart(message.content)) {
+    await logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: 'd!forcerestart', type: 'Developer command', args: ['ops'] });
+    return void (await forceRestart(message));
   }
 
   // n!ping: every NorthGate bot answers it.

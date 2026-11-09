@@ -32,6 +32,7 @@ function accessFor(name) {
   if (name === 'hrpanel') return 'admin';
   if (name === 'config') return 'owner';
   if (name === 'n!ping') return 'everyone';
+  if (name === 'd!forcerestart') return 'owner';
   return null;
 }
 
@@ -70,6 +71,7 @@ function listPages(client) {
     .map((command) => `• \`/${command.name}\` - ${command.description || 'No description provided.'}`);
   const prefixLines = [
     '• `n!ping` - Check the bot is running and see its latency.',
+    '• `d!forcerestart ops` - Restart Staff Management immediately.',
     `• \`${PREFIX} <user> <command>\` - Check whether someone could run a command, without running it.`,
   ];
 

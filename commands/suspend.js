@@ -4,6 +4,7 @@ const { getWriter } = require('../handlers/rosterWriter');
 const { hubSettings } = require('../handlers/settings');
 const { actionEmbed, postTo, dm } = require('../handlers/hrnotices');
 const { COLORS } = require('../handlers/embeds');
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('../handlers/progress');
 
 // /suspend [user] [reason]
 // Sets their Employment Status to Suspended on every roster row they have, logs it
@@ -22,31 +23,42 @@ module.exports = {
     const target = interaction.options.getUser('user');
     const reason = interaction.options.getString('reason').trim();
 
-    try {
-      await getWriter().setStatus({ discordId: target.id, status: 'Suspended' });
-    } catch (err) {
-      return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-    }
+    const progress = createInteractionProgress(interaction, `Suspending ${target.username}`, [
+      'Update their roster status',
+      'DM them',
+      'Log it in the infraction channel',
+    ]);
 
-    const embed = actionEmbed({
-      title: 'Staff Suspension',
-      color: COLORS.infract,
-      target,
-      message: 'You have been suspended from the NorthGate Studios staff team. Please review the reason below.',
-      fields: [{ name: 'Reason', value: reason, inline: false }],
-      by: interaction.user,
-    });
-    const dmed = await dm(target, embed);
-    const logged = await postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
-      content: `<@${target.id}>`,
-      embeds: [embed],
-      allowedMentions: { parse: [] },
-    });
-    require('../handlers/hrpanel').refreshSoon();
+    return withProgress(async () => {
+      await progress.start();
+      await progress.runStep(0, async () => {
+        try {
+          await getWriter().setStatus({ discordId: target.id, status: 'Suspended' });
+        } catch (err) {
+          throw new ProgressFailure(explain(err, `<@${target.id}>`));
+        }
+      });
 
-    const lines = [`Suspended <@${target.id}>. Their roster status is now **Suspended**.`];
-    if (!logged) lines.push('Could not log it. Set infract_channel with /config in the staff hub.');
-    if (!dmed) lines.push('Their DMs are closed, so they were not told.');
-    return interaction.editReply({ content: lines.join('\n') });
+      const embed = actionEmbed({
+        title: 'Staff Suspension',
+        color: COLORS.infract,
+        target,
+        message: 'You have been suspended from the NorthGate Studios staff team. Please review the reason below.',
+        fields: [{ name: 'Reason', value: reason, inline: false }],
+        by: interaction.user,
+      });
+      const dmed = await progress.softStep(1, () => dm(target, embed));
+      const logged = await progress.softStep(2, () => postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
+        content: `<@${target.id}>`,
+        embeds: [embed],
+        allowedMentions: { parse: [] },
+      }));
+      require('../handlers/hrpanel').refreshSoon();
+
+      const lines = [say.ok(`Suspended <@${target.id}>. Their roster status is now **Suspended**.`)];
+      if (!logged) lines.push(say.warn('Could not log it. Set infract_channel with /config in the staff hub.'));
+      if (!dmed) lines.push(say.warn('Their DMs are closed, so they were not told.'));
+      await progress.complete(lines.join('\n'));
+    });
   },
 };

@@ -6,6 +6,7 @@ const { getServers, hubSettings } = require('../handlers/settings');
 const { actionEmbed, postTo, dm } = require('../handlers/hrnotices');
 const { allChoices, byValue, labelFor } = require('../handlers/departments');
 const { COLORS } = require('../handlers/embeds');
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('../handlers/progress');
 
 // /fire [user] [department] [type] [reason]
 // Moves the person's row in that department from the Official Staff Roster to the
@@ -94,38 +95,51 @@ module.exports = {
     const type = interaction.options.getString('type');
     const reason = interaction.options.getString('reason').trim();
 
-    if (!department) return interaction.editReply({ content: 'Pick the department they are leaving. Nothing was changed.' });
+    if (!department) return interaction.editReply({ content: say.error('Pick the department they are leaving. Nothing was changed.') });
 
     const { hub } = getServers();
     const hubGuild = hub ? interaction.client.guilds.cache.get(hub) : null;
     if (!hubGuild) {
       return interaction.editReply({
-        content: hub
+        content: say.error(hub
           ? 'I am not in the staff hub any more, so I cannot remove them. Nothing was changed.'
-          : 'No staff hub is set, so I do not know where to remove them from. Run `/config server:hub` in the staff hub first. Nothing was changed.',
+          : 'No staff hub is set, so I do not know where to remove them from. Run `/config server:hub` in the staff hub first. Nothing was changed.'),
       });
     }
+
+    const retired = type === 'Retired';
+    const steps = [`Move them out of **${department.label}** onto the Former Staff Roster`];
+    if (!retired) steps.push('Make their termination letter');
+    steps.push('DM them', 'Remove them from the staff hub if this was their last department', 'Log it in the infraction channel');
+    const progress = createInteractionProgress(interaction, `${type}: ${target.username}`, steps);
+    let step = 0;
+
+    return withProgress(async () => {
+    await progress.start();
 
     let warning = null;
     let result;
-    try {
-      result = await getWriter().fire({
-        discordId: target.id,
-        section: department.section,
-        type,
-        reason,
-        by: interaction.user.username,
-        date: formatDate(Date.now()),
-      });
-    } catch (err) {
-      if (err.code !== 'verify') return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-      warning = explain(err, `<@${target.id}>`);
-      result = err;
-    }
+    await progress.runStep(step, async () => {
+      try {
+        result = await getWriter().fire({
+          discordId: target.id,
+          section: department.section,
+          type,
+          reason,
+          by: interaction.user.username,
+          date: formatDate(Date.now()),
+        });
+      } catch (err) {
+        if (err.code !== 'verify') throw new ProgressFailure(explain(err, `<@${target.id}>`));
+        warning = explain(err, `<@${target.id}>`);
+        result = err;
+      }
+    });
+    if (warning) await progress.warnStep(step);
+    step += 1;
 
     const remaining = result.remaining || [];
     const leftStaff = remaining.length === 0;
-    const retired = type === 'Retired';
     const embed = actionEmbed({
       title: retired ? 'Staff Retirement' : 'Staff Termination',
       color: retired ? COLORS.info : COLORS.infract,
@@ -150,64 +164,75 @@ module.exports = {
     let letter = null;
     let letterProblem = null;
     if (!retired) {
-      try {
-        letter = await buildLetter(interaction, {
-          target,
-          result,
-          reason,
-          department,
-          appealable: interaction.options.getString('appealable'),
-          statement: interaction.options.getString('statement'),
-          authorizedBy: interaction.options.getUser('authorized_by'),
-          cosignedBy: interaction.options.getUser('cosigned_by'),
-        });
-        if (!letter) letterProblem = 'No termination letter was made: the letter template is not on this machine (assets/private/termination-template.png).';
-      } catch (err) {
-        console.error('[fire] could not make the termination letter:', err);
-        letterProblem = `No termination letter was made: ${err.message}.`;
-      }
+      await progress.softStep(step, async () => {
+        try {
+          letter = await buildLetter(interaction, {
+            target,
+            result,
+            reason,
+            department,
+            appealable: interaction.options.getString('appealable'),
+            statement: interaction.options.getString('statement'),
+            authorizedBy: interaction.options.getUser('authorized_by'),
+            cosignedBy: interaction.options.getUser('cosigned_by'),
+          });
+          if (!letter) letterProblem = 'No termination letter was made: the letter template is not on this machine (assets/private/termination-template.png).';
+        } catch (err) {
+          console.error('[fire] could not make the termination letter:', err);
+          letterProblem = `No termination letter was made: ${err.message}.`;
+        }
+        return !letterProblem;
+      });
+      step += 1;
     }
     const files = () => (letter ? [new AttachmentBuilder(letter.pdf, { name: letter.name })] : []);
 
-    const dmed = await dm(target, embed, files());
+    const dmed = await progress.softStep(step, () => dm(target, embed, files()));
+    step += 1;
 
     let removal;
-    if (!leftStaff) {
-      removal = `They are still listed under ${remaining.map(labelFor).join(', ')}, so they stay in the staff hub.`;
-    } else {
+    await progress.softStep(step, async () => {
+      if (!leftStaff) {
+        removal = say.info(`They are still listed under ${remaining.map(labelFor).join(', ')}, so they stay in the staff hub.`);
+        return true;
+      }
       const hubMember = await hubGuild.members.fetch(target.id).catch(() => null);
       if (!hubMember) {
-        removal = 'They were not in the staff hub, so there was nobody to remove.';
-      } else {
-        try {
-          await hubMember.kick(`${type} by ${interaction.user.username}: ${reason}`);
-          removal = 'That was their last department, so I removed them from the staff hub.';
-        } catch (err) {
-          removal = `Could not remove them from the staff hub (check my Kick Members permission and role position there): ${err.message}`;
-        }
+        removal = say.info('They were not in the staff hub, so there was nobody to remove.');
+        return true;
       }
-    }
+      try {
+        await hubMember.kick(`${type} by ${interaction.user.username}: ${reason}`);
+        removal = say.ok('That was their last department, so I removed them from the staff hub.');
+        return true;
+      } catch (err) {
+        removal = say.warn(`Could not remove them from the staff hub (check my Kick Members permission and role position there): ${err.message}`);
+        return false;
+      }
+    });
+    step += 1;
 
-    const logged = await postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
+    const logged = await progress.softStep(step, () => postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
       content: `<@${target.id}>`,
       embeds: [embed],
       files: files(),
       allowedMentions: { parse: [] },
-    });
+    }));
     require('../handlers/hrpanel').refreshSoon();
 
     const lines = [
-      `**${type}**: moved <@${target.id}> out of **${department.label}**, to the same department on the Former Staff Roster.`,
+      say.ok(`**${type}**: moved <@${target.id}> out of **${department.label}**, to the same department on the Former Staff Roster.`),
       removal,
     ];
-    if (result.addedSection) lines.push(`The Former Staff Roster had no ${department.label} section, so I added one.`);
-    if (!logged) lines.push('Could not log it. Set infract_channel with /config in the staff hub.');
-    if (!dmed) lines.push('Their DMs are closed, so they were not told.');
+    if (result.addedSection) lines.push(say.info(`The Former Staff Roster had no ${department.label} section, so I added one.`));
+    if (!logged) lines.push(say.warn('Could not log it. Set infract_channel with /config in the staff hub.'));
+    if (!dmed) lines.push(say.warn('Their DMs are closed, so they were not told.'));
     if (letter) {
-      lines.push(`Made their termination letter${dmed ? ', sent it to them' : ''}${logged ? `${dmed ? ' and' : ','} attached it to the infraction log` : ''}.`);
+      lines.push(say.ok(`Made their termination letter${dmed ? ', sent it to them' : ''}${logged ? `${dmed ? ' and' : ','} attached it to the infraction log` : ''}.`));
     }
-    if (letterProblem) lines.push(letterProblem);
-    if (warning) lines.push(warning);
-    return interaction.editReply({ content: lines.join('\n') });
+    if (letterProblem) lines.push(say.warn(letterProblem));
+    if (warning) lines.push(say.warn(warning));
+    await progress.complete(lines.join('\n'));
+    });
   },
 };

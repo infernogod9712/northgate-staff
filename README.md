@@ -22,8 +22,8 @@ everything still logs in the hub.
 3. Turn on the **Server Members** and **Message Content** intents in the Discord
    Developer Portal, under Bot > Privileged Gateway Intents.
 4. `node index.js`
-5. Send `!sc` in any server the bot is in to register the slash commands. Only the
-   two owner ids can run it. Global commands take up to about an hour to appear.
+5. Nothing to run: the slash commands register themselves in every server on each
+   start, and in any new server the bot joins. They show up straight away.
 6. **In the staff hub:** `/config server:hub`, plus `staff_leadership`,
    `promote_channel`, `infract_channel`, `report_forum` and `loa_channel` (a forum). They can
    all go in the same command.
@@ -62,7 +62,7 @@ It needs no token and no network, and never touches `data/`.
 | `/reportembed` | Staff Leadership | Posts the staff report panel |
 | `/hrpanel` | Administrators | Private snapshot of low performance and leave |
 | `/config` | Bot owners only | Sets every role and channel the bot uses |
-| `!sc` | Bot owners only | Registers the slash commands with Discord |
+| `d!impersonate <user> <command>` | Bot owners only | Says whether that person could run one of this bot's commands, without running it. `d!impersonate list` lists them all |
 
 ## HR panel
 
@@ -198,7 +198,7 @@ role View Channel and take it away from everyone else.
 
 | File | What it does |
 | --- | --- |
-| `index.js` | Starts the bot, loads commands, routes interactions, handles `!sc` |
+| `index.js` | Starts the bot, loads commands, routes interactions, registers the slash commands, handles `d!impersonate` |
 | `config.js` | Reads the secrets out of `.env` and checks they are filled in |
 | `git-sync.js` | On the Pi, watches GitHub and pulls new commits by itself |
 | `handlers/settings.js` | Per-server settings saved to `data/settings.json` |

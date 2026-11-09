@@ -4,6 +4,7 @@ const {
 } = require('../handlers/settings');
 const { isOwner, isPubliclyReadable } = require('../handlers/permissions');
 const { COLORS } = require('../handlers/embeds');
+const { say } = require('../handlers/progress');
 
 // /config [options]
 // One command for every setting. Run it with no options to see what is set now.
@@ -106,7 +107,7 @@ module.exports = {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     if (!isOwner(interaction.user.id)) {
-      return interaction.editReply({ content: 'Only the bot owners can change the configuration.' });
+      return interaction.editReply({ content: say.error('Only the bot owners can change the configuration.') });
     }
 
     const guildId = interaction.guild.id;
@@ -120,8 +121,8 @@ module.exports = {
       setServer(serverChoice, guildId);
       const name = serverChoice === 'hub' ? 'staff hub' : 'main server';
       lines.push(before && before !== guildId
-        ? `**This server is now the ${name}.** It replaces the server that was the ${name} before.`
-        : `**This server is the ${name}.**`);
+        ? say.ok(`**This server is now the ${name}.** It replaces the server that was the ${name} before.`)
+        : say.ok(`**This server is the ${name}.**`));
     }
 
     const roles = serverRoles(guildId);
@@ -141,21 +142,21 @@ module.exports = {
         const needs = owner(key);
         const where = needs === 'hub' ? 'staff hub' : 'main server';
         lines.push(roles.length && needs !== 'either'
-          ? `Skipped **${optionName}**: that belongs to the ${where}, and this server is not it.`
-          : `Skipped **${optionName}**: set \`server\` first so I know whether this is the hub or the main server.`);
+          ? say.warn(`Skipped **${optionName}**: that belongs to the ${where}, and this server is not it.`)
+          : say.warn(`Skipped **${optionName}**: set \`server\` first so I know whether this is the hub or the main server.`));
         continue;
       }
 
       if (PRIVATE_ONLY.includes(key) && isPubliclyReadable(value)) {
         problem = true;
-        lines.push(`Skipped **${optionName}**: @everyone can read <#${value.id}>, and the HR panel shows staff performance ratings. Pick a staff-only channel.`);
+        lines.push(say.warn(`Skipped **${optionName}**: @everyone can read <#${value.id}>, and the HR panel shows staff performance ratings. Pick a staff-only channel.`));
         continue;
       }
 
       // bc!hire puts details on someone's hire, so only a bot account may send it.
       if (kind === 'user' && !value.bot) {
         problem = true;
-        lines.push(`Skipped **${optionName}**: <@${value.id}> is not a bot. Pick the ticket bot itself.`);
+        lines.push(say.warn(`Skipped **${optionName}**: <@${value.id}> is not a bot. Pick the ticket bot itself.`));
         continue;
       }
 
@@ -164,7 +165,7 @@ module.exports = {
       // was one, simply stops updating and can be deleted by hand.
       if (key === 'hrPanelChannel' && current.hrPanelChannel !== value.id) patch.hrPanelMessage = null;
 
-      lines.push(`**${optionName}** set to ${mention(value.id, kind)}`);
+      lines.push(say.ok(`**${optionName}** set to ${mention(value.id, kind)}`));
     }
 
     if (Object.keys(patch).length) updateSettings(guildId, patch);
@@ -178,7 +179,7 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor(problem ? COLORS.infract : lines.length ? COLORS.promote : COLORS.info)
       .setTitle(`Configuration - ${interaction.guild.name}`)
-      .setDescription(lines.length ? lines.join('\n') : 'Nothing changed. Here is the current setup.')
+      .setDescription(lines.length ? lines.join('\n') : say.info('Nothing changed. Here is the current setup.'))
       .addFields(
         { name: 'Staff Hub', value: describe(servers.hub), inline: true },
         { name: 'Main Server', value: describe(servers.main), inline: true },

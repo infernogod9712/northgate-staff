@@ -4,6 +4,7 @@ const { infractionEmbed } = require('../handlers/embeds');
 const { startHrCommand, explain } = require('../handlers/hrcommand');
 const { getWriter, formatDate } = require('../handlers/rosterWriter');
 const { postTo, dm } = require('../handlers/hrnotices');
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('../handlers/progress');
 
 // /infract [user] [type] [reason]
 // Logs an infraction in the hub's infraction channel, DMs the member, and records
@@ -35,32 +36,45 @@ module.exports = {
     const issuer = interaction.user;
 
     const embed = infractionEmbed(target, type, reason, issuer, null);
-    const dmed = await dm(target, embed);
-    const logged = await postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
+    const progress = createInteractionProgress(interaction, `${type}: ${target.username}`, [
+      'DM them',
+      'Log it in the infraction channel',
+      'Record it on the roster',
+    ]);
+
+    return withProgress(async () => {
+    await progress.start();
+    const dmed = await progress.softStep(0, () => dm(target, embed));
+    const logged = await progress.softStep(1, () => postTo(interaction.client, hubSettings(interaction.guild.id).infractChannel, {
       content: `<@${target.id}>`,
       embeds: [embed],
       allowedMentions: { users: [target.id] },
-    });
+    }));
 
     const field = type === 'Warning' ? 'warnings' : 'infractions';
     let sheet;
+    await progress.softStep(2, async () => {
     try {
       await getWriter().appendText({
         discordId: target.id,
         field,
         line: `${type}: ${reason} (${formatDate(Date.now())}, by ${issuer.username})`,
       });
-      sheet = `Added to their ${field === 'warnings' ? 'Warnings' : 'Infractions'} on the roster.`;
+      sheet = say.ok(`Added to their ${field === 'warnings' ? 'Warnings' : 'Infractions'} on the roster.`);
+      return true;
     } catch (err) {
-      sheet = err.code === 'not_on_roster'
+      sheet = say.warn(err.code === 'not_on_roster'
         ? 'They are not on the Official Staff Roster, so the sheet was not updated.'
-        : explain(err, `<@${target.id}>`);
+        : explain(err, `<@${target.id}>`));
+      return false;
     }
+    });
 
-    const lines = [`Logged **${type}** for <@${target.id}>.`];
-    if (!logged) lines.push('(Could not log it. Set infract_channel with /config in the staff hub.)');
+    const lines = [say.ok(`Logged **${type}** for <@${target.id}>.`)];
+    if (!logged) lines.push(say.warn('Could not log it. Set infract_channel with /config in the staff hub.'));
     lines.push(sheet);
-    if (!dmed) lines.push('Their DMs are closed, so they were not told.');
-    return interaction.editReply({ content: lines.join('\n') });
+    if (!dmed) lines.push(say.warn('Their DMs are closed, so they were not told.'));
+    await progress.complete(lines.join('\n'));
+    });
   },
 };

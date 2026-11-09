@@ -5,6 +5,7 @@
 const { MessageFlags } = require('discord.js');
 const { canManageHR, isBanned, BANNED_MESSAGE } = require('./permissions');
 const { labelFor } = require('./departments');
+const { say } = require('./progress');
 
 // Defers privately, then checks permission. Returns false after answering the
 // person if they are not allowed, so the command must stop.
@@ -15,11 +16,11 @@ const { labelFor } = require('./departments');
 async function startHrCommand(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (isBanned(interaction.user.id)) {
-    await interaction.editReply({ content: BANNED_MESSAGE });
+    await interaction.editReply({ content: say.error(BANNED_MESSAGE) });
     return false;
   }
   if (await canManageHR(interaction.member)) return true;
-  await interaction.editReply({ content: 'You need the HR role, Staff Leadership, or Administrator to use this.' });
+  await interaction.editReply({ content: say.error('You need the HR role, Staff Leadership, or Administrator to use this.') });
   return false;
 }
 

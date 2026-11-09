@@ -2,6 +2,7 @@ const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('disc
 const { mainSettings } = require('../handlers/settings');
 const { canManageStaff } = require('../handlers/permissions');
 const { reportBoxEmbed, reportBoxRow } = require('../handlers/embeds');
+const { say } = require('../handlers/progress');
 
 // /reportembed
 // Posts the staff report panel. It goes in the main server's report channel set
@@ -18,7 +19,7 @@ module.exports = {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     if (!(await canManageStaff(interaction.member))) {
-      return interaction.editReply({ content: 'You need the Staff Leadership role to use this.' });
+      return interaction.editReply({ content: say.error('You need the Staff Leadership role to use this.') });
     }
 
     const { staffReportChannel } = mainSettings(interaction.guild.id);
@@ -27,15 +28,15 @@ module.exports = {
       : interaction.channel;
 
     if (!channel) {
-      return interaction.editReply({ content: 'The report channel could not be found. Check report_channel with /config in the main server.' });
+      return interaction.editReply({ content: say.error('The report channel could not be found. Check report_channel with /config in the main server.') });
     }
 
     try {
       await channel.send({ embeds: [reportBoxEmbed()], components: [reportBoxRow()] });
     } catch (err) {
-      return interaction.editReply({ content: `Could not post there: ${err.message}` });
+      return interaction.editReply({ content: say.error(`Could not post there: ${err.message}`) });
     }
 
-    await interaction.editReply({ content: `Report panel posted in <#${channel.id}>.` });
+    await interaction.editReply({ content: say.ok(`Report panel posted in <#${channel.id}>.`) });
   },
 };

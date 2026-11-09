@@ -87,13 +87,13 @@ async function handleBotMessage(message, now = Date.now()) {
   const command = word.toLowerCase();
 
   if (command !== 'hire') {
-    await say(`I do not know the bot command \`bc!${command.slice(0, 30)}\`. Nothing was saved.`);
+    await say(`❌ I do not know the bot command \`bc!${command.slice(0, 30)}\`. Nothing was saved.`);
     return { command: command.slice(0, 30) || '(blank)' };
   }
 
   const parsed = parseHire(rest.join(' '));
   if (parsed.error) {
-    await say(`Could not read that bc!hire: ${parsed.error}. Nothing was saved.`);
+    await say(`❌ Could not read that bc!hire: ${parsed.error}. Nothing was saved.`);
     return { command };
   }
 

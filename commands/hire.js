@@ -5,6 +5,7 @@ const { byValue, hiringChoices } = require('../handlers/departments');
 const { welcomeEmbed, dm } = require('../handlers/hrnotices');
 const { pendingHire, clearPendingHire } = require('../handlers/botcomms');
 const { getNewHireManager } = require('../handlers/newhires');
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('../handlers/progress');
 
 // /hire [department] [sheet_rank] [rank] [user] [roblox_id] [nickname]
 // Adds the person to the bottom of their department on the Official Staff Roster
@@ -61,12 +62,12 @@ module.exports = {
     if (!target && pending) target = await interaction.client.users.fetch(pending.discordId).catch(() => null);
     if (!target) {
       return interaction.editReply({
-        content: pending
+        content: say.error(pending
           ? `The ticket bot sent a Discord ID (${pending.discordId}) that I cannot find. Pick the \`user\`. Nothing was changed.`
-          : 'Pick the `user` to hire. In a hiring ticket this is filled in from the ticket bot\'s bc!hire, but there is none in this channel. Nothing was changed.',
+          : 'Pick the `user` to hire. In a hiring ticket this is filled in from the ticket bot\'s bc!hire, but there is none in this channel. Nothing was changed.'),
       });
     }
-    if (target.bot) return interaction.editReply({ content: 'Bots cannot be put on the staff roster.' });
+    if (target.bot) return interaction.editReply({ content: say.error('Bots cannot be put on the staff roster.') });
 
     // The ticket's details only count for the person they were sent about.
     const ticket = pending && pending.discordId === target.id ? pending : null;
@@ -76,20 +77,20 @@ module.exports = {
     const rank = interaction.options.getRole('rank');
     const robloxId = (interaction.options.getString('roblox_id') || ticket?.robloxId || '').trim();
     if (robloxId && !/^\d+$/.test(robloxId)) {
-      return interaction.editReply({ content: 'That Roblox ID is not a number. Leave it empty if you do not have it yet.' });
+      return interaction.editReply({ content: say.error('That Roblox ID is not a number. Leave it empty if you do not have it yet.') });
     }
 
     const member = await interaction.guild.members.fetch(target.id).catch(() => null);
-    if (!member) return interaction.editReply({ content: `<@${target.id}> is not in this server, so I cannot give them the rank role. Nothing was changed.` });
+    if (!member) return interaction.editReply({ content: say.error(`<@${target.id}> is not in this server, so I cannot give them the rank role. Nothing was changed.`) });
 
     // The @everyone role shares the server's id and can never be given.
     if (rank.id === interaction.guild.id) {
-      return interaction.editReply({ content: '@everyone is not a rank role. Pick the actual rank role. Nothing was changed.' });
+      return interaction.editReply({ content: say.error('@everyone is not a rank role. Pick the actual rank role. Nothing was changed.') });
     }
 
     // See handlers/rankcommand.js: compared to false on purpose.
     if (rank.editable === false) {
-      return interaction.editReply({ content: `I cannot give **${rank.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.` });
+      return interaction.editReply({ content: say.error(`I cannot give **${rank.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.`) });
     }
 
     // Their Discord username, not their nickname in this server. A server nickname
@@ -97,59 +98,76 @@ module.exports = {
     // person across the whole community.
     const nickname = (interaction.options.getString('nickname') || ticket?.nickname || target.username).trim();
 
-    try {
-      await getWriter().hire({
-        nickname,
-        discordId: target.id,
-        robloxId,
-        role: title,
-        section: department.section,
-        date: formatDate(Date.now()),
+    const progress = createInteractionProgress(interaction, `Hiring ${target.username}`, [
+      `Add them to **${department.label}** on the roster`,
+      `Give them **${rank.name}**`,
+      'Post the welcome in this channel',
+      'DM them a copy of the welcome',
+    ]);
+
+    return withProgress(async () => {
+      await progress.start();
+
+      let activeAt = null;
+      await progress.runStep(0, async () => {
+        try {
+          await getWriter().hire({
+            nickname,
+            discordId: target.id,
+            robloxId,
+            role: title,
+            section: department.section,
+            date: formatDate(Date.now()),
+          });
+        } catch (err) {
+          throw new ProgressFailure(explain(err, `<@${target.id}>`));
+        }
+
+        // Used, so it is not kept a moment longer than needed.
+        if (ticket) clearPendingHire(channelId);
+
+        // They are on the roster as New Hire. Start their two weeks. A failure here
+        // leaves them as New Hire for HR to change by hand, and must not undo a hire
+        // that has already happened.
+        try {
+          activeAt = getNewHireManager().track({ discordId: target.id, department: department.section, by: interaction.user.id }).activeAt;
+        } catch (err) {
+          console.error('[hire] could not start the New Hire period:', err.message);
+        }
       });
-    } catch (err) {
-      return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-    }
 
-    // Used, so it is not kept a moment longer than needed.
-    if (ticket) clearPendingHire(channelId);
+      let roleProblem = null;
+      await progress.softStep(1, async () => {
+        try {
+          await member.roles.add(rank.id, `Hired by ${interaction.user.username} into ${department.label}`);
+          return true;
+        } catch (err) {
+          roleProblem = `They are on the roster, but I could not give them **${rank.name}**: ${err.message}.`;
+          return false;
+        }
+      });
 
-    // They are on the roster as New Hire. Start their two weeks. A failure here
-    // leaves them as New Hire for HR to change by hand, and must not undo a hire
-    // that has already happened.
-    let activeAt = null;
-    try {
-      activeAt = getNewHireManager().track({ discordId: target.id, department: department.section, by: interaction.user.id }).activeAt;
-    } catch (err) {
-      console.error('[hire] could not start the New Hire period:', err.message);
-    }
+      const embed = welcomeEmbed({ user: target, nickname, department: department.label, role: title, hiredBy: interaction.user });
+      const posted = await progress.softStep(2, () => (interaction.channel
+        ? interaction.channel
+          .send({ content: `<@${target.id}>`, embeds: [embed], allowedMentions: { users: [target.id] } })
+          .then(() => true, () => false)
+        : false));
+      const dmed = await progress.softStep(3, () => dm(target, embed));
+      require('../handlers/hrpanel').refreshSoon();
 
-    let roleProblem = null;
-    try {
-      await member.roles.add(rank.id, `Hired by ${interaction.user.username} into ${department.label}`);
-    } catch (err) {
-      roleProblem = `They are on the roster, but I could not give them **${rank.name}**: ${err.message}.`;
-    }
-
-    const embed = welcomeEmbed({ user: target, nickname, department: department.label, role: title, hiredBy: interaction.user });
-    const posted = interaction.channel
-      ? await interaction.channel
-        .send({ content: `<@${target.id}>`, embeds: [embed], allowedMentions: { users: [target.id] } })
-        .then(() => true, () => false)
-      : false;
-    const dmed = await dm(target, embed);
-    require('../handlers/hrpanel').refreshSoon();
-
-    const lines = [roleProblem
-      ? `Hired <@${target.id}> into **${department.label}** as **${title}** and added them to the roster.`
-      : `Hired <@${target.id}> into **${department.label}** as **${title}**, gave them <@&${rank.id}>, and added them to the roster.`];
-    lines.push(activeAt
-      ? `Their status is **New Hire**. It becomes **Active** by itself on <t:${Math.floor(activeAt / 1000)}:D>, unless it is changed before then.`
-      : 'Their status is **New Hire**, but I could not start the two week timer, so change it to Active by hand when they are ready.');
-    if (ticket) lines.push(`Used the ticket bot's details: nickname **${nickname}**${robloxId ? `, Roblox ID ${robloxId}` : ''}.`);
-    if (pending && !ticket) lines.push(`This ticket's bc!hire details are for <@${pending.discordId}>, not them, so they were not used.`);
-    if (roleProblem) lines.push(roleProblem);
-    if (!posted) lines.push('I could not post the welcome message in this channel.');
-    if (!dmed) lines.push('Their DMs are closed, so they did not get a copy of the welcome.');
-    return interaction.editReply({ content: lines.join('\n'), allowedMentions: { parse: [] } });
+      const lines = [say.ok(roleProblem
+        ? `Hired <@${target.id}> into **${department.label}** as **${title}** and added them to the roster.`
+        : `Hired <@${target.id}> into **${department.label}** as **${title}**, gave them <@&${rank.id}>, and added them to the roster.`)];
+      lines.push(activeAt
+        ? say.info(`Their status is **New Hire**. It becomes **Active** by itself on <t:${Math.floor(activeAt / 1000)}:D>, unless it is changed before then.`)
+        : say.warn('Their status is **New Hire**, but I could not start the two week timer, so change it to Active by hand when they are ready.'));
+      if (ticket) lines.push(say.info(`Used the ticket bot's details: nickname **${nickname}**${robloxId ? `, Roblox ID ${robloxId}` : ''}.`));
+      if (pending && !ticket) lines.push(say.info(`This ticket's bc!hire details are for <@${pending.discordId}>, not them, so they were not used.`));
+      if (roleProblem) lines.push(say.warn(roleProblem));
+      if (!posted) lines.push(say.warn('I could not post the welcome message in this channel.'));
+      if (!dmed) lines.push(say.warn('Their DMs are closed, so they did not get a copy of the welcome.'));
+      await progress.complete(lines.join('\n'));
+    });
   },
 };

@@ -3,20 +3,22 @@ const path = require('path');
 const { Client, GatewayIntentBits, Collection, Events, MessageFlags } = require('discord.js');
 const config = require('./config');
 const { handleButton, handleModal } = require('./handlers/interactions');
-const { isOwner } = require('./handlers/permissions');
 const { startAutoSync } = require('./git-sync');
 const { startHrPanel } = require('./handlers/hrpanel');
 const { startLeaveChecks } = require('./handlers/leave');
 const { startNewHireChecks } = require('./handlers/newhires');
 const { logCommand } = require('./handlers/commandlog');
+const { say } = require('./handlers/progress');
 const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
+const { registerEverywhere, registerInGuild } = require('./handlers/register');
+const { handleImpersonate } = require('./handlers/impersonate');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // needed for the !sc chat command
+    GatewayIntentBits.MessageContent, // needed for bc! and d!impersonate
   ],
 });
 
@@ -37,6 +39,9 @@ for (const file of fs.readdirSync(commandsPath).filter((f) => f.endsWith('.js'))
 client.once(Events.ClientReady, () => {
   console.log(`[NGS] Online as ${client.user.tag}`);
   console.log(`[NGS] Loaded ${client.commands.size} command(s) in ${client.guilds.cache.size} server(s)`);
+
+  // No !sc any more: the commands register themselves on every start.
+  registerEverywhere(client).catch((e) => console.error('[commands] registration failed:', e.message));
 
   // On the Pi, watch GitHub and pull new commits automatically. Logs out cleanly
   // first so pm2 restarts the process on the fresh code.
@@ -75,7 +80,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // offers global commands in a DM with the bot, where there is no server at all,
     // and every command would crash on it.
     if (!interaction.inGuild()) {
-      return void (await interaction.reply({ content: 'Use my commands inside the server, not in DMs.', flags: MessageFlags.Ephemeral }));
+      return void (await interaction.reply({ content: say.error('Use my commands inside the server, not in DMs.'), flags: MessageFlags.Ephemeral }));
     }
 
     // Logged before it runs, and whether or not the person is allowed to use it.
@@ -93,14 +98,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await command.execute(interaction);
   } catch (err) {
     console.error('[NGS] interaction error:', err);
-    const msg = { content: 'Something went wrong running that.', flags: MessageFlags.Ephemeral };
+    const msg = { content: say.error('Something went wrong running that.'), flags: MessageFlags.Ephemeral };
     if (interaction.deferred || interaction.replied) await interaction.editReply(msg).catch(() => {});
     else await interaction.reply(msg).catch(() => {});
   }
 });
 
-// !sc (owners only) registers the slash commands globally, so they appear in every
-// server the bot is in. Global commands can take up to about an hour to propagate.
+// Messages: bc! commands from the other NorthGate bots, and d!impersonate.
 client.on(Events.MessageCreate, async (message) => {
   if (!message.guild) return;
 
@@ -119,40 +123,23 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (message.content.trim() !== '!sc') return;
-
-  logCommand({
-    client,
-    guild: message.guild,
-    channel: message.channel,
-    user: message.author,
-    name: 'sc',
-    type: 'Prefix command',
-  });
-
-  if (!isOwner(message.author.id)) {
-    return message.reply('Only the bot owners can sync commands.').catch(() => {});
-  }
+  // d!impersonate: the developer tool every NorthGate bot shares. This bot
+  // answers for its own commands only (handlers/impersonate.js).
+  let handled = null;
   try {
-    const data = [...client.commands.values()].map((c) => c.data.toJSON());
-    await client.application.commands.set(data);
-    // Wipe leftover per-guild copies or they show up as duplicates next to the
-    // global ones.
-    let cleared = 0;
-    for (const guild of client.guilds.cache.values()) {
-      try {
-        await guild.commands.set([]);
-        cleared += 1;
-      } catch (e) {
-        console.warn(`[NGS] could not clear guild commands in ${guild.id}:`, e.message);
-      }
-    }
-    await message.reply(`Synced ${data.length} commands globally and cleared per-guild copies in ${cleared} server(s). Global commands can take up to about an hour to refresh.`);
+    handled = await handleImpersonate(message);
   } catch (err) {
-    console.error('[NGS] sync error:', err);
-    await message.reply(`Sync failed: ${err.message}`).catch(() => {});
+    console.error('[impersonate] failed:', err);
+    await message.reply(say.error('That check failed. See the bot logs.')).catch(() => {});
+    handled = 'd!impersonate';
+  }
+  if (handled) {
+    logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled, type: 'Prefix command' });
   }
 });
+
+// Slash commands register themselves on every server the bot joins.
+client.on(Events.GuildCreate, (guild) => registerInGuild(guild, [...client.commands.values()]));
 
 // A ticket that is closed and deleted without a /hire takes its bc!hire details
 // with it, so nothing about a person is kept for a ticket that no longer exists.

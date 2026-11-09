@@ -35,9 +35,9 @@ async function logCommand({ client, guild, channel, user, name, type = 'Slash co
       return false;
     }
 
-    const shown = type === 'Prefix command' ? `!${name}` : type === 'Bot command' ? `bc!${name}` : `/${name}`;
+    const shown = type === 'Prefix command' ? (name.includes('!') ? name : `!${name}`) : type === 'Bot command' ? `bc!${name}` : `/${name}`;
     const embed = new EmbedBuilder()
-      .setColor(COLORS.info)
+      .setColor(0x2b6cb0) // NorthGate OS's command log colour
       .setTitle('Command Used')
       .addFields(
         { name: 'Command', value: `\`${shown}\``, inline: true },

@@ -1,10 +1,11 @@
 const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, escapeMarkdown } = require('discord.js');
 
-// One shared palette so every embed the bot sends reads as one system.
+// One shared palette so every embed the bot sends reads as one system. These are
+// NorthGate OS's colours, so all the NorthGate bots match (see handlers/progress.js).
 const COLORS = {
   promote: 0x2ecc71, // green   - promotions, approvals
   infract: 0xe74c3c, // red     - infractions, denials, reports
-  info:    0x5865f2, // blurple - panels and notices
+  info:    0x3498db, // blue    - panels and notices (NorthGate OS blue)
 };
 
 function withFooter(embed, text, iconURL) {

@@ -7,6 +7,7 @@ const { MessageFlags } = require('discord.js');
 const { findReportForum } = require('./settings');
 const { buildReportModal, readReportFields } = require('./forms');
 const { reportLogEmbed } = require('./embeds');
+const { say } = require('./progress');
 
 async function handleButton(interaction) {
   if (interaction.customId === 'report_open') {
@@ -25,7 +26,7 @@ async function handleReport(interaction) {
   const forumId = findReportForum();
   if (!forumId) {
     return interaction.reply({
-      content: 'Staff reports are not set up yet. Ask an owner to run /config server:hub and set report_forum in the staff hub.',
+      content: say.error('Staff reports are not set up yet. Ask an owner to run /config server:hub and set report_forum in the staff hub.'),
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -33,7 +34,7 @@ async function handleReport(interaction) {
   const forum = await interaction.client.channels.fetch(forumId).catch(() => null);
   if (!forum) {
     return interaction.reply({
-      content: 'The HR report forum could not be found. Ask an owner to check report_forum in /config.',
+      content: say.error('The HR report forum could not be found. Ask an owner to check report_forum in /config.'),
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -48,13 +49,13 @@ async function handleReport(interaction) {
   } catch (err) {
     console.error('[report] could not create the forum post:', err.message);
     return interaction.reply({
-      content: 'Could not file your report. Ask an owner to check the bot can post in the HR forum.',
+      content: say.error('Could not file your report. Ask an owner to check the bot can post in the HR forum.'),
       flags: MessageFlags.Ephemeral,
     });
   }
 
   await interaction.reply({
-    content: 'Your report has been sent to the HR department. They will follow up with you.',
+    content: say.ok('Your report has been sent to the HR department. They will follow up with you.'),
     flags: MessageFlags.Ephemeral,
   });
   return true;

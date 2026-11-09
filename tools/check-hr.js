@@ -1673,11 +1673,11 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return !missing.length || `missing ${missing.join(', ')}`;
   });
 
-  await check('!sc is logged as a prefix command', async () => {
+  await check('d!impersonate is logged as a prefix command', async () => {
     const w = world();
-    await logCommand({ client: w.client, guild: w.main, channel: { id: CH.here }, user: fakeUser('700000000000000041'), name: 'sc', type: 'Prefix command' });
+    await logCommand({ client: w.client, guild: w.main, channel: { id: CH.here }, user: fakeUser('700000000000000041'), name: 'd!impersonate', type: 'Prefix command' });
     const text = payloadText(w.ch.log.sent[0] || {});
-    return (text.includes('`!sc`') && text.includes('Prefix command')) || text;
+    return (text.includes('d!impersonate') && text.includes('Prefix command')) || text;
   });
 
   await check('commands in any other server are not logged', async () => {

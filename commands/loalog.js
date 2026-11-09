@@ -4,6 +4,7 @@ const { getLeaveManager, parseUntil } = require('../handlers/leave');
 const { hubSettings } = require('../handlers/settings');
 const { actionEmbed, postLeave, dm } = require('../handlers/hrnotices');
 const { COLORS } = require('../handlers/embeds');
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('../handlers/progress');
 
 // /loalog [user] [action] [until] [reason]
 // Starts a Leave of Absence or Reduced Activity with an end date, or ends one
@@ -45,17 +46,26 @@ module.exports = {
 
     const forumProblem = (post) => (post.ok
       ? null
-      : post.error === 'no leave forum is set'
+      : say.warn(post.error === 'no leave forum is set'
         ? 'Could not post it. Set loa_channel to a forum with /config in the staff hub.'
-        : `Could not post in the leave forum: ${post.error}`);
+        : `Could not post in the leave forum: ${post.error}`));
 
     if (action === 'end') {
+      const progress = createInteractionProgress(interaction, `Ending the leave of ${target.username}`, [
+        'Set their roster status back to Active',
+        'Post it in the leave forum',
+        'DM them',
+      ]);
+      return withProgress(async () => {
+      await progress.start();
       let entry;
-      try {
-        ({ entry } = await manager.end({ discordId: target.id }));
-      } catch (err) {
-        return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-      }
+      await progress.runStep(0, async () => {
+        try {
+          ({ entry } = await manager.end({ discordId: target.id }));
+        } catch (err) {
+          throw new ProgressFailure(explain(err, `<@${target.id}>`));
+        }
+      });
       const what = entry?.status || 'leave';
       const embed = actionEmbed({
         title: 'Leave Ended Early',
@@ -65,38 +75,49 @@ module.exports = {
         fields: reason ? [{ name: 'Note', value: reason, inline: false }] : [],
         by: interaction.user,
       });
-      const post = await postLeave(interaction.client, loaChannel, {
+      const post = await progress.runStep(1, () => postLeave(interaction.client, loaChannel, {
         title: `${what} - ${name}`,
         payload: { embeds: [embed], allowedMentions: { parse: [] } },
         threadId: entry?.threadId,
-      });
-      const dmed = await dm(target, new EmbedBuilder()
+      }));
+      if (!post.ok) await progress.warnStep(1);
+      const dmed = await progress.softStep(2, () => dm(target, new EmbedBuilder()
         .setColor(COLORS.promote)
         .setTitle('Welcome back')
         .setDescription(`Your ${what} has been ended and your status is back to Active. Welcome back to the team!`)
-        .setTimestamp());
+        .setTimestamp()));
       require('../handlers/hrpanel').refreshSoon();
 
-      const lines = [`Ended <@${target.id}>'s ${what}. Their roster status is back to **Active**.`];
+      const lines = [say.ok(`Ended <@${target.id}>'s ${what}. Their roster status is back to **Active**.`)];
       if (forumProblem(post)) lines.push(forumProblem(post));
-      if (!dmed) lines.push('Their DMs are closed, so they were not told.');
-      return interaction.editReply({ content: lines.join('\n') });
+      if (!dmed) lines.push(say.warn('Their DMs are closed, so they were not told.'));
+      await progress.complete(lines.join('\n'));
+      });
     }
 
     const status = action === 'loa' ? 'Leave of Absence' : 'Reduced Activity';
     const untilText = interaction.options.getString('until');
     if (!untilText) {
-      return interaction.editReply({ content: 'Add `until`: the last day they are away, like 2026-10-01, or a length like 7d or 2w. Nothing was changed.' });
+      return interaction.editReply({ content: say.error('Add `until`: the last day they are away, like 2026-10-01, or a length like 7d or 2w. Nothing was changed.') });
     }
     const parsed = parseUntil(untilText, Date.now());
-    if (parsed.error) return interaction.editReply({ content: `That end date does not work: ${parsed.error}. Nothing was changed.` });
+    if (parsed.error) return interaction.editReply({ content: say.error(`That end date does not work: ${parsed.error}. Nothing was changed.`) });
 
+    const progress = createInteractionProgress(interaction, `${status}: ${target.username}`, [
+      `Set their roster status to ${status}`,
+      'Post it in the leave forum',
+      'DM them a copy',
+    ]);
+    return withProgress(async () => {
+    await progress.start();
     let previous;
-    try {
-      ({ previous } = await manager.begin({ discordId: target.id, status, until: parsed.ms, reason, by: interaction.user.username }));
-    } catch (err) {
-      return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-    }
+    await progress.runStep(0, async () => {
+      try {
+        ({ previous } = await manager.begin({ discordId: target.id, status, until: parsed.ms, reason, by: interaction.user.username }));
+      } catch (err) {
+        throw new ProgressFailure(explain(err, `<@${target.id}>`));
+      }
+    });
 
     const back = Math.floor(parsed.ms / 1000);
     const embed = actionEmbed({
@@ -110,19 +131,21 @@ module.exports = {
       ],
       by: interaction.user,
     });
-    const post = await postLeave(interaction.client, loaChannel, {
+    const post = await progress.runStep(1, () => postLeave(interaction.client, loaChannel, {
       title: `${status} - ${name}`,
       payload: { embeds: [embed], allowedMentions: { parse: [] } },
       threadId: previous?.threadId,
-    });
+    }));
+    if (!post.ok) await progress.warnStep(1);
     if (post.threadId) manager.attachThread(target.id, post.threadId);
-    const dmed = await dm(target, embed);
+    const dmed = await progress.softStep(2, () => dm(target, embed));
     require('../handlers/hrpanel').refreshSoon();
 
-    const lines = [`Logged **${status}** for <@${target.id}>. They will be set back to Active automatically on <t:${back}:D> (<t:${back}:R>).`];
-    if (previous) lines.push('This replaces the end date they already had.');
+    const lines = [say.ok(`Logged **${status}** for <@${target.id}>. They will be set back to Active automatically on <t:${back}:D> (<t:${back}:R>).`)];
+    if (previous) lines.push(say.info('This replaces the end date they already had.'));
     if (forumProblem(post)) lines.push(forumProblem(post));
-    if (!dmed) lines.push('Their DMs are closed, so they did not get a copy.');
-    return interaction.editReply({ content: lines.join('\n') });
+    if (!dmed) lines.push(say.warn('Their DMs are closed, so they did not get a copy.'));
+    await progress.complete(lines.join('\n'));
+    });
   },
 };

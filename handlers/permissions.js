@@ -1,6 +1,6 @@
 // Who is allowed to do what.
 //
-//   isOwner        - the two ids in .env. Runs !sc and /config, nothing else.
+//   isOwner        - the two ids in .env. Runs /config and d!impersonate, nothing else.
 //   canManageStaff - Administrators of the server the command is run in, or
 //                    anyone holding the Staff Leadership role IN THE STAFF HUB.
 //                    Runs /promote, /demote and /reportembed.

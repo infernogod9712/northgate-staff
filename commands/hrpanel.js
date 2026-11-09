@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { isAdmin } = require('../handlers/permissions');
 const { snapshotEmbed } = require('../handlers/hrpanel');
+const { say } = require('../handlers/progress');
 
 // /hrpanel
 // Shows who is at or below 3 stars on Performance and who is on leave, as a
@@ -20,7 +21,7 @@ module.exports = {
 
     // The builder permission is a default a server admin can undo, so check again.
     if (!isAdmin(interaction.member)) {
-      return interaction.editReply({ content: 'You need Administrator to use this.' });
+      return interaction.editReply({ content: say.error('You need Administrator to use this.') });
     }
 
     const embed = await snapshotEmbed(interaction.client);

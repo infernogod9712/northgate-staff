@@ -1,6 +1,7 @@
 // ratingcommand.js
 // /setperformancerating and /setactivityrating are the same command pointed at 
 // different columns, so both are built here.
+const { say } = require('./progress');
 
 const { SlashCommandBuilder } = require('discord.js');
 const { startHrCommand, explain } = require('./hrcommand');
@@ -35,13 +36,13 @@ function ratingCommand({ name, field, label }) {
       try {
         result = await getWriter().setRating({ discordId: target.id, field, stars, section: department?.section });
       } catch (err) {
-        return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
+        return interaction.editReply({ content: say.error(explain(err, `<@${target.id}>`)) });
       }
 
       require('./hrpanel').refreshSoon();
       const shown = `${'★'.repeat(stars)}${'☆'.repeat(5 - stars)}`;
       return interaction.editReply({
-        content: `Set <@${target.id}>'s ${label} rating to ${shown} (${stars}/5) under **${labelFor(result.department)}**.`,
+        content: say.ok(`Set <@${target.id}>'s ${label} rating to ${shown} (${stars}/5) under **${labelFor(result.department)}**.`),
       });
     },
   };

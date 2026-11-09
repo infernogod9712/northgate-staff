@@ -16,6 +16,7 @@
 //
 // The new role is given before the old one is taken away, so a failure halfway
 // leaves them with both ranks rather than with none.
+const { say, createInteractionProgress, withProgress, ProgressFailure } = require('./progress');
 
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { hubSettings } = require('./settings');
@@ -60,10 +61,10 @@ function rankCommand(kind) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (isBanned(interaction.user.id)) {
-        return interaction.editReply({ content: BANNED_MESSAGE });
+        return interaction.editReply({ content: say.error(BANNED_MESSAGE) });
       }
       if (!(await canManageStaff(interaction.member))) {
-        return interaction.editReply({ content: 'You need the Staff Leadership role to use this.' });
+        return interaction.editReply({ content: say.error('You need the Staff Leadership role to use this.') });
       }
 
       const target = interaction.options.getUser('user');
@@ -75,16 +76,16 @@ function rankCommand(kind) {
       const issuer = interaction.user;
 
       if (previous.id === next.id) {
-        return interaction.editReply({ content: '`previous_rank` and `new_rank` are the same role. Nothing was changed.' });
+        return interaction.editReply({ content: say.error('`previous_rank` and `new_rank` are the same role. Nothing was changed.') });
       }
       // The @everyone role shares the server's id. It can be picked in a role option
       // but can never be given or taken away.
       if (previous.id === interaction.guild.id || next.id === interaction.guild.id) {
-        return interaction.editReply({ content: '@everyone is not a rank role. Pick the actual rank roles. Nothing was changed.' });
+        return interaction.editReply({ content: say.error('@everyone is not a rank role. Pick the actual rank roles. Nothing was changed.') });
       }
 
       const member = await interaction.guild.members.fetch(target.id).catch(() => null);
-      if (!member) return interaction.editReply({ content: 'That user is not in this server. Nothing was changed.' });
+      if (!member) return interaction.editReply({ content: say.error('That user is not in this server. Nothing was changed.') });
 
       // `editable` is false when the role is above the bot's own role or the bot lacks
       // Manage Roles. Compared to false on purpose: a role Discord did not fully send
@@ -92,54 +93,70 @@ function rankCommand(kind) {
       const locked = [next, previous].find((role) => role.editable === false);
       if (locked) {
         return interaction.editReply({
-          content: `I cannot ${locked === next ? 'give' : 'take away'} **${locked.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.`,
+          content: say.error(`I cannot ${locked === next ? 'give' : 'take away'} **${locked.name}**: my bot role has to be ABOVE it and I need Manage Roles. Nothing was changed.`),
         });
       }
 
       const hadPrevious = member.roles.cache.has(previous.id);
 
+      const progress = createInteractionProgress(interaction, `${k.verb === 'Promote' ? 'Promoting' : 'Demoting'} ${target.username}`, [
+        `Set their roster title to **${title}**`,
+        `Give them **${next.name}**`,
+        `Take away **${previous.name}**`,
+        `Log it in the ${k.logOption.replace('_channel', '')} channel`,
+        'DM them',
+      ]);
+
+      return withProgress(async () => {
+      await progress.start();
       let sheet;
-      try {
-        sheet = await getWriter().setRole({ discordId: target.id, title, section: department?.section });
-      } catch (err) {
-        return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
-      }
+      await progress.runStep(0, async () => {
+        try {
+          sheet = await getWriter().setRole({ discordId: target.id, title, section: department?.section });
+        } catch (err) {
+          throw new ProgressFailure(explain(err, `<@${target.id}>`));
+        }
+      });
 
       const why = `${k.verb} by ${issuer.username}: ${reason}`.slice(0, 500);
-      try {
-        await member.roles.add(next.id, why);
-      } catch (err) {
-        return interaction.editReply({
-          content: `Their roster title is now **${title}**, but I could not give **${next.name}**: ${err.message}. They still have **${previous.name}**. Check my role position and Manage Roles, then run it again.`,
-        });
-      }
+      await progress.runStep(1, async () => {
+        try {
+          await member.roles.add(next.id, why);
+        } catch (err) {
+          throw new ProgressFailure(`Their roster title is now **${title}**, but I could not give **${next.name}**: ${err.message}. They still have **${previous.name}**. Check my role position and Manage Roles, then run it again.`);
+        }
+      });
 
       let removeProblem = null;
-      if (hadPrevious) {
+      await progress.softStep(2, async () => {
+        if (!hadPrevious) return true;
         try {
           await member.roles.remove(previous.id, why);
+          return true;
         } catch (err) {
           removeProblem = `I gave them **${next.name}** but could not take away **${previous.name}**: ${err.message}.`;
+          return false;
         }
-      }
+      });
 
       const embed = rankChangeEmbed({ kind, target, previous, next, reason, issuer, title });
-      const logged = await postTo(interaction.client, hubSettings(interaction.guild.id)[k.logKey], {
+      const logged = await progress.softStep(3, () => postTo(interaction.client, hubSettings(interaction.guild.id)[k.logKey], {
         content: `<@${target.id}>`,
         embeds: [embed],
         allowedMentions: { users: [target.id] },
-      });
-      const dmed = await dm(target, embed);
+      }));
+      const dmed = await progress.softStep(4, () => dm(target, embed));
 
       const was = sheet.previous && sheet.previous !== title ? ` (was ${sheet.previous})` : '';
       const lines = [
-        `${k.past} <@${target.id}> from <@&${previous.id}> to <@&${next.id}> and set their roster title to **${title}**${was} under **${labelFor(sheet.department)}**.`,
+        say.ok(`${k.past} <@${target.id}> from <@&${previous.id}> to <@&${next.id}> and set their roster title to **${title}**${was} under **${labelFor(sheet.department)}**.`),
       ];
-      if (!hadPrevious) lines.push(`They did not have <@&${previous.id}>, so there was nothing to take away.`);
-      if (removeProblem) lines.push(removeProblem);
-      if (!logged) lines.push(`(Could not log it. Set ${k.logOption} with /config in the staff hub.)`);
-      if (!dmed) lines.push('Their DMs are closed, so they were not told.');
-      return interaction.editReply({ content: lines.join('\n'), allowedMentions: { parse: [] } });
+      if (!hadPrevious) lines.push(say.info(`They did not have <@&${previous.id}>, so there was nothing to take away.`));
+      if (removeProblem) lines.push(say.warn(removeProblem));
+      if (!logged) lines.push(say.warn(`Could not log it. Set ${k.logOption} with /config in the staff hub.`));
+      if (!dmed) lines.push(say.warn('Their DMs are closed, so they were not told.'));
+      await progress.complete(lines.join('\n'));
+      });
     },
   };
 }

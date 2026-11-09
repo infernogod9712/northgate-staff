@@ -1,6 +1,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { startHrCommand, explain } = require('../handlers/hrcommand');
 const { getWriter, formatDate } = require('../handlers/rosterWriter');
+const { say } = require('../handlers/progress');
 
 // /addnote [user] [note]
 // Adds a dated line to the person's Notes on the roster, signed with who added
@@ -27,11 +28,11 @@ module.exports = {
     try {
       ({ rows } = await getWriter().appendText({ discordId: target.id, field: 'notes', line }));
     } catch (err) {
-      return interaction.editReply({ content: explain(err, `<@${target.id}>`) });
+      return interaction.editReply({ content: say.error(explain(err, `<@${target.id}>`)) });
     }
 
     return interaction.editReply({
-      content: `Added a note to <@${target.id}> on the roster${rows > 1 ? `, on all ${rows} of their department rows` : ''}.`,
+      content: say.ok(`Added a note to <@${target.id}> on the roster${rows > 1 ? `, on all ${rows} of their department rows` : ''}.`),
     });
   },
 };

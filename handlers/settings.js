@@ -146,8 +146,7 @@ function serverRoles(guildId) {
 // Pi would restart onto this code with no servers marked, and promotions,
 // infractions and staff reports would all stop logging at once. They would stay
 // stopped until an owner ran /config in both servers, and /config cannot even
-// offer the server option until !sc has re-registered the commands, which
-// Discord can take up to an hour to show.
+// offer the server option until the commands have re-registered on startup.
 //
 // Removing somebody is the one thing that does NOT fall back. /fire refuses to
 // run until a hub is marked, because kicking from the wrong server was the bug.

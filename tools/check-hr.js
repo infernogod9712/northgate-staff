@@ -994,13 +994,16 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
   section('Banned users');
   // =========================================================================
   const { isBanned, BANNED_USERS, BANNED_MESSAGE } = require(path.join(ROOT, 'handlers', 'permissions'));
-  const BANNED = BANNED_USERS[0];
+  // The real list can be empty, so the checks ban a made-up id for this section
+  // only and take it off again at the end.
+  const BANNED = '700000000000000099';
 
-  await check('the banned list is not empty and holds Discord ids', () => {
-    if (!BANNED_USERS.length) return 'the banned list is empty';
+  await check('every id on the banned list is a Discord id', () => {
     const bad = BANNED_USERS.filter((id) => !/^\d{17,20}$/.test(id));
     return !bad.length || `not Discord ids: ${bad.join(', ')}`;
   });
+
+  BANNED_USERS.push(BANNED);
 
   await check('isBanned matches only the ids on the list', () => {
     if (!isBanned(BANNED)) return 'did not match the id as text';
@@ -1058,6 +1061,7 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     }
     return true;
   });
+  BANNED_USERS.splice(BANNED_USERS.indexOf(BANNED), 1);
 
   await check('everybody else still gets in', async () => {
     const w = world();

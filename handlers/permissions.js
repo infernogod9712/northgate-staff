@@ -15,9 +15,7 @@ const { getServers, getSettings } = require('./settings');
 // checked before anything else, so giving them the HR role, Staff Leadership or
 // even Administrator does not get them back in. Take an id out of this list to
 // give someone their access back.
-const BANNED_USERS = [
-  '1419379683455271034',
-];
+const BANNED_USERS = [];
 
 // One wording, used everywhere a banned person is turned away.
 const BANNED_MESSAGE = 'You are not permitted to use HR commands.';

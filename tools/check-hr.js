@@ -1691,10 +1691,18 @@ const payloadText = (p) => `${p.content || ''} ${JSON.stringify((p.embeds || [])
     return w.ch.log.sent.length === 0 || 'logged a third server';
   });
 
-  await check('the log never includes what was typed into the command', async () => {
+  await check('the log shows the arguments, like NorthGate OS', async () => {
     const w = world();
-    await logCommand({ client: w.client, guild: w.main, channel: { id: CH.here }, user: fakeUser('700000000000000043'), name: 'addnote', options: { note: 'SECRET NOTE TEXT' } });
-    return !payloadText(w.ch.log.sent[0] || {}).includes('SECRET') || 'the note text reached the log';
+    await logCommand({ client: w.client, guild: w.main, channel: { id: CH.here }, user: fakeUser('700000000000000043'), name: 'addnote', args: ['user=700000000000000002', 'note=hello there'] });
+    const text = payloadText(w.ch.log.sent[0] || {});
+    return (text.includes('Arguments') && text.includes('note=hello there')) || text;
+  });
+
+  await check('d!impersonate is logged as a check that ran nothing', async () => {
+    const w = world();
+    await logCommand({ client: w.client, guild: w.main, channel: { id: CH.here }, user: fakeUser('700000000000000045'), name: 'd!impersonate', type: 'Impersonation check (nothing was run)', args: ['700000000000000002', 'hire'] });
+    const text = payloadText(w.ch.log.sent[0] || {});
+    return (text.includes('nothing was run') && text.includes('700000000000000002 hire') && text.includes('`d!impersonate`')) || text;
   });
 
   await check('with no log channel set, nothing is sent and nothing breaks', async () => {

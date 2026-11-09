@@ -7,7 +7,7 @@ const { startAutoSync } = require('./git-sync');
 const { startHrPanel } = require('./handlers/hrpanel');
 const { startLeaveChecks } = require('./handlers/leave');
 const { startNewHireChecks } = require('./handlers/newhires');
-const { logCommand } = require('./handlers/commandlog');
+const { logCommand, formatOptions } = require('./handlers/commandlog');
 const { say } = require('./handlers/progress');
 const { handleBotMessage, clearPendingHire } = require('./handlers/botcomms');
 const { registerEverywhere, registerInGuild } = require('./handlers/register');
@@ -92,6 +92,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       channel: interaction.channel,
       user: interaction.user,
       name: interaction.commandName,
+      args: formatOptions(interaction.options.data),
     });
 
     const command = client.commands.get(interaction.commandName);
@@ -119,7 +120,7 @@ client.on(Events.MessageCreate, async (message) => {
       console.error('[bc] could not handle a bot message:', err.message);
     }
     if (handled) {
-      logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled.command, type: 'Bot command' });
+      logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled.command, type: 'Bot command', args: message.content.trim().split(/\s+/).slice(1) });
     }
     return;
   }
@@ -141,7 +142,7 @@ client.on(Events.MessageCreate, async (message) => {
     handled = 'd!impersonate';
   }
   if (handled) {
-    logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled, type: 'Prefix command' });
+    logCommand({ client, guild: message.guild, channel: message.channel, user: message.author, name: handled, type: 'Impersonation check (nothing was run)', args: message.content.trim().split(/\s+/).slice(1) });
   }
 });
 
